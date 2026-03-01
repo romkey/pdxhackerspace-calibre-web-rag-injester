@@ -15,7 +15,11 @@ class Settings:
     qdrant_url: str
     qdrant_api_key: str | None
     qdrant_collection: str
+    embedding_provider: str
     embedding_model: str
+    hf_cache_dir: str | None
+    ollama_url: str
+    ollama_timeout_seconds: int
     chunk_size: int
     chunk_overlap: int
     batch_size: int
@@ -40,7 +44,15 @@ def load_settings() -> Settings:
         qdrant_url=os.getenv("QDRANT_URL", "http://qdrant:6333"),
         qdrant_api_key=os.getenv("QDRANT_API_KEY"),
         qdrant_collection=os.getenv("QDRANT_COLLECTION", "calibre_books"),
+        embedding_provider=os.getenv("EMBEDDING_PROVIDER", "sentence_transformers").lower(),
         embedding_model=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
+        hf_cache_dir=(
+            os.getenv("HF_CACHE_DIR")
+            or os.getenv("SENTENCE_TRANSFORMERS_HOME")
+            or os.getenv("HF_HOME")
+        ),
+        ollama_url=os.getenv("OLLAMA_URL", "http://ollama:11434"),
+        ollama_timeout_seconds=int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
         chunk_size=int(os.getenv("CHUNK_SIZE", "1200")),
         chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "120")),
         batch_size=int(os.getenv("BATCH_SIZE", "64")),

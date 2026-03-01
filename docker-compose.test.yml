@@ -11,8 +11,12 @@ services:
       - .env
     environment:
       - QDRANT_URL=http://qdrant:6333
+      - HF_HOME=${HF_CACHE_DIR:-/hf-cache}
+      - TRANSFORMERS_CACHE=${HF_CACHE_DIR:-/hf-cache}
+      - SENTENCE_TRANSFORMERS_HOME=${HF_CACHE_DIR:-/hf-cache}
     volumes:
       - ./:/workspace
+      - ${HF_CACHE_HOST_DIR:-./.cache/huggingface}:${HF_CACHE_DIR:-/hf-cache}
     depends_on:
       - qdrant
     command: >

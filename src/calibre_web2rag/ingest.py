@@ -5,11 +5,11 @@ import logging
 from collections.abc import Iterator
 
 from qdrant_client.models import PointStruct
-from sentence_transformers import SentenceTransformer
 
 from calibre_web2rag.calibre_db import CalibreRepository
 from calibre_web2rag.chunking import split_text
 from calibre_web2rag.config import Settings
+from calibre_web2rag.embeddings import Embedder, build_embedder
 from calibre_web2rag.extractors import (
     extract_epub_text,
     extract_mobi_text,
@@ -56,7 +56,7 @@ def _point_id(value: str) -> str:
 
 def ingest(settings: Settings) -> int:
     repo = CalibreRepository(settings.calibre_metadata_db, settings.calibre_library_root)
-    embedder = SentenceTransformer(settings.embedding_model)
+    embedder = build_embedder(settings)
     store = QdrantStore(
         url=settings.qdrant_url,
         api_key=settings.qdrant_api_key,
@@ -75,7 +75,7 @@ def ingest(settings: Settings) -> int:
 def _generate_points(
     *,
     repo: CalibreRepository,
-    embedder: SentenceTransformer,
+    embedder: Embedder,
     settings: Settings,
 ) -> Iterator[list[PointStruct]]:
     batch: list[PointStruct] = []
@@ -89,7 +89,7 @@ def _generate_points(
             chunks = split_text(text=text, chunk_size=settings.chunk_size, overlap=settings.chunk_overlap)
             if not chunks:
                 continue
-            vectors = embedder.encode(chunks, show_progress_bar=False)
+            vectors = embedder.encode(chunks)
             for idx, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
                 source_url = build_ebook_url(
                     book_id=book.book_id,
@@ -126,7 +126,7 @@ def _generate_points(
                 }
                 point = PointStruct(
                     id=_point_id(f"{book.book_id}:{file.format}:{idx}:{chunk[:32]}"),
-                    vector=vector.tolist() if hasattr(vector, "tolist") else list(vector),
+                    vector=vector,
                     payload=payload,
                 )
                 batch.append(point)

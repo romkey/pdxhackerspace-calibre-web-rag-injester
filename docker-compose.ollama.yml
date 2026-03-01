@@ -1,0 +1,39 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ollama-pull:
+    image: curlimages/curl:latest
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+    command: >
+      sh -c "sleep 3 &&
+             curl -fsS -X POST $$OLLAMA_URL/api/pull
+             -H 'Content-Type: application/json'
+             -d '{\"model\":\"'$$EMBEDDING_MODEL'\"}'"
+
+  ingester:
+    environment:
+      - EMBEDDING_PROVIDER=ollama
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+    depends_on:
+      - qdrant
+      - ollama
+      - ollama-pull
+
+volumes:
+  ollama_data:
