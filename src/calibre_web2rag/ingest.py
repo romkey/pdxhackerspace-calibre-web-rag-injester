@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+import hashlib
+import logging
+from collections.abc import Iterator
+
+from qdrant_client.models import PointStruct
+from sentence_transformers import SentenceTransformer
+
+from calibre_web2rag.calibre_db import CalibreRepository
+from calibre_web2rag.chunking import split_text
+from calibre_web2rag.config import Settings
+from calibre_web2rag.extractors import (
+    extract_epub_text,
+    extract_mobi_text,
+    extract_pdf_text,
+    is_epub_drm_free,
+    is_mobi_drm_free,
+    is_pdf_drm_free,
+)
+from calibre_web2rag.links import build_ebook_url, build_opds_url
+from calibre_web2rag.qdrant_store import QdrantStore
+
+logger = logging.getLogger(__name__)
+
+
+def _extract_text(fmt: str, path: str) -> str:
+    from pathlib import Path
+
+    p = Path(path)
+    if fmt == "PDF":
+        return extract_pdf_text(p)
+    if fmt == "EPUB":
+        return extract_epub_text(p)
+    if fmt == "MOBI":
+        return extract_mobi_text(p)
+    return ""
+
+
+def _drm_free(fmt: str, path: str) -> bool:
+    from pathlib import Path
+
+    p = Path(path)
+    if fmt == "PDF":
+        return is_pdf_drm_free(p)
+    if fmt == "EPUB":
+        return is_epub_drm_free(p)
+    if fmt == "MOBI":
+        return is_mobi_drm_free(p)
+    return False
+
+
+def _point_id(value: str) -> str:
+    return hashlib.sha1(value.encode("utf-8")).hexdigest()
+
+
+def ingest(settings: Settings) -> int:
+    repo = CalibreRepository(settings.calibre_metadata_db, settings.calibre_library_root)
+    embedder = SentenceTransformer(settings.embedding_model)
+    store = QdrantStore(
+        url=settings.qdrant_url,
+        api_key=settings.qdrant_api_key,
+        collection=settings.qdrant_collection,
+        vector_size=settings.vector_size,
+        distance=settings.distance,
+    )
+
+    inserted = 0
+    for batch in _generate_points(repo=repo, embedder=embedder, settings=settings):
+        store.upsert(batch)
+        inserted += len(batch)
+    return inserted
+
+
+def _generate_points(
+    *,
+    repo: CalibreRepository,
+    embedder: SentenceTransformer,
+    settings: Settings,
+) -> Iterator[list[PointStruct]]:
+    batch: list[PointStruct] = []
+    for book in repo.fetch_books():
+        for file in book.files:
+            file_path = str(file.file_path)
+            if not _drm_free(file.format, file_path):
+                logger.info("Skipping DRM-protected or unreadable file: %s", file_path)
+                continue
+            text = _extract_text(file.format, file_path)
+            chunks = split_text(text=text, chunk_size=settings.chunk_size, overlap=settings.chunk_overlap)
+            if not chunks:
+                continue
+            vectors = embedder.encode(chunks, show_progress_bar=False)
+            for idx, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
+                source_url = build_ebook_url(
+                    book_id=book.book_id,
+                    fmt=file.format,
+                    base_url=settings.calibre_web_base_url,
+                    template=settings.calibre_download_url_template,
+                )
+                payload = {
+                    "book_id": book.book_id,
+                    "title": book.title,
+                    "authors": book.authors,
+                    "tags": book.tags,
+                    "publisher": book.publisher,
+                    "series": book.series,
+                    "rating": book.rating,
+                    "languages": book.languages,
+                    "identifiers": book.identifiers,
+                    "isbn": book.isbn,
+                    "uuid": book.uuid,
+                    "published_at": book.published_at,
+                    "updated_at": book.updated_at,
+                    "comment": book.comments,
+                    "library_path": book.path,
+                    "file_format": file.format,
+                    "file_name": file.file_name,
+                    "file_path": file_path,
+                    "source_url": source_url,
+                    "opds_url": build_opds_url(
+                        book_id=book.book_id,
+                        base_url=settings.calibre_web_base_url,
+                    ),
+                    "chunk_index": idx,
+                    "chunk_text": chunk,
+                }
+                point = PointStruct(
+                    id=_point_id(f"{book.book_id}:{file.format}:{idx}:{chunk[:32]}"),
+                    vector=vector.tolist() if hasattr(vector, "tolist") else list(vector),
+                    payload=payload,
+                )
+                batch.append(point)
+                if len(batch) >= settings.batch_size:
+                    yield batch
+                    batch = []
+    if batch:
+        yield batch

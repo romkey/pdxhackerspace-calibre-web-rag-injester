@@ -1,0 +1,20 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6334:6333"
+
+  tests:
+    image: python:3.11-slim
+    working_dir: /workspace
+    env_file:
+      - .env
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - ./:/workspace
+    depends_on:
+      - qdrant
+    command: >
+      sh -c "pip install --no-cache-dir -e .[dev] &&
+             pytest -q"

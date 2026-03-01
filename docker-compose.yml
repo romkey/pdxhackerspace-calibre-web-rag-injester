@@ -1,0 +1,19 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  ingester:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ${CALIBRE_LIBRARY_ROOT}:${CALIBRE_LIBRARY_ROOT}:ro
+    depends_on:
+      - qdrant
+
+volumes:
+  qdrant_data:

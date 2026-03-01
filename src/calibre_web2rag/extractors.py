@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+from pathlib import Path
+from zipfile import ZipFile
+
+import mobi
+from bs4 import BeautifulSoup
+from ebooklib import ITEM_DOCUMENT, epub
+from pypdf import PdfReader
+
+
+def is_pdf_drm_free(path: Path) -> bool:
+    try:
+        reader = PdfReader(str(path))
+        return not reader.is_encrypted
+    except Exception:
+        return False
+
+
+def is_epub_drm_free(path: Path) -> bool:
+    try:
+        with ZipFile(path, "r") as archive:
+            names = {name.lower() for name in archive.namelist()}
+            # Most DRM-protected EPUB files include this manifest entry.
+            if "meta-inf/encryption.xml" in names:
+                data = archive.read("META-INF/encryption.xml")
+                return len(data.strip()) == 0
+        return True
+    except Exception:
+        return False
+
+
+def is_mobi_drm_free(path: Path) -> bool:
+    try:
+        with path.open("rb") as fp:
+            header = fp.read(16)
+            if len(header) < 14:
+                return False
+            encryption_type = int.from_bytes(header[12:14], byteorder="big", signed=False)
+            return encryption_type == 0
+    except Exception:
+        return False
+
+
+def extract_pdf_text(path: Path) -> str:
+    reader = PdfReader(str(path))
+    return "\n".join((page.extract_text() or "") for page in reader.pages)
+
+
+def extract_epub_text(path: Path) -> str:
+    book = epub.read_epub(str(path))
+    blocks: list[str] = []
+    for item in book.get_items():
+        if item.get_type() != ITEM_DOCUMENT:
+            continue
+        soup = BeautifulSoup(item.get_body_content(), "html.parser")
+        text = soup.get_text(" ", strip=True)
+        if text:
+            blocks.append(text)
+    return "\n\n".join(blocks)
+
+
+def extract_mobi_text(path: Path) -> str:
+    tempdir, extracted = mobi.extract(str(path))
+    extracted_path = Path(tempdir) / extracted
+    data = extracted_path.read_text(encoding="utf-8", errors="ignore")
+    soup = BeautifulSoup(data, "html.parser")
+    return soup.get_text(" ", strip=True)
