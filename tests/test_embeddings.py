@@ -67,7 +67,10 @@ def test_build_embedder_uses_ollama_provider(monkeypatch) -> None:
 
 
 def test_build_embedder_uses_st_cache_directory(monkeypatch) -> None:
-    monkeypatch.setattr("calibre_web2rag.embeddings.SentenceTransformer", _FakeSentenceTransformer)
+    monkeypatch.setattr(
+        "calibre_web2rag.embeddings._load_sentence_transformer",
+        lambda: _FakeSentenceTransformer,
+    )
     settings = Settings(
         calibre_metadata_db="db.sqlite",
         calibre_library_root="/tmp",

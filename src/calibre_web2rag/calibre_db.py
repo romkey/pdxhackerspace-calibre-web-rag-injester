@@ -91,7 +91,12 @@ class CalibreRepository:
                         rating=self._get_rating(conn, book_id),
                         languages=self._get_name_list(
                             conn,
-                            "SELECT lang_code FROM books_languages_link WHERE book = ?",
+                            """
+                            SELECT l.lang_code
+                            FROM languages l
+                            JOIN books_languages_link bll ON bll.lang_code = l.id
+                            WHERE bll.book = ?
+                            """,
                             book_id,
                         ),
                         identifiers=self._get_identifiers(conn, book_id),
@@ -107,7 +112,9 @@ class CalibreRepository:
         finally:
             conn.close()
 
-    def _get_files(self, conn: sqlite3.Connection, book_id: int, rel_path: str) -> list[CalibreFile]:
+    def _get_files(
+        self, conn: sqlite3.Connection, book_id: int, rel_path: str
+    ) -> list[CalibreFile]:
         files: list[CalibreFile] = []
         rows = conn.execute(
             "SELECT format, uncompressed_size, name FROM data WHERE book = ?", (book_id,)
@@ -143,7 +150,8 @@ class CalibreRepository:
     @staticmethod
     def _get_identifiers(conn: sqlite3.Connection, book_id: int) -> dict[str, str]:
         rows = conn.execute(
-            "SELECT type, val FROM identifiers WHERE book = ? AND type IS NOT NULL AND val IS NOT NULL",
+            "SELECT type, val FROM identifiers "
+            "WHERE book = ? AND type IS NOT NULL AND val IS NOT NULL",
             (book_id,),
         ).fetchall()
         return {str(row["type"]): str(row["val"]) for row in rows}

@@ -8,9 +8,9 @@ WORKDIR /app
 
 COPY pyproject.toml README.md /app/
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip
+    pip install --no-compile --upgrade pip
 COPY src /app/src
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install .
+    pip install --no-compile .
 
 ENTRYPOINT ["calibre-web2rag"]

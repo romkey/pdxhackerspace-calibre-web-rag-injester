@@ -5,6 +5,12 @@ from pathlib import Path
 
 
 @dataclass(frozen=True)
+class TextSection:
+    title: str | None
+    text: str
+
+
+@dataclass(frozen=True)
 class CalibreFile:
     format: str
     file_path: Path

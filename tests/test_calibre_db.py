@@ -15,9 +15,14 @@ def test_fetch_books_from_calibre_db(tmp_path: Path) -> None:
     try:
         conn.executescript(
             """
-            CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, path TEXT, isbn TEXT, uuid TEXT, pubdate TEXT, last_modified TEXT);
+            CREATE TABLE books (
+                id INTEGER PRIMARY KEY, title TEXT, path TEXT,
+                isbn TEXT, uuid TEXT, pubdate TEXT, last_modified TEXT
+            );
             CREATE TABLE comments (book INTEGER, text TEXT);
-            CREATE TABLE data (book INTEGER, format TEXT, uncompressed_size INTEGER, name TEXT);
+            CREATE TABLE data (
+                book INTEGER, format TEXT, uncompressed_size INTEGER, name TEXT
+            );
             CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT);
             CREATE TABLE books_authors_link (id INTEGER PRIMARY KEY, book INTEGER, author INTEGER);
             CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT);
@@ -28,16 +33,20 @@ def test_fetch_books_from_calibre_db(tmp_path: Path) -> None:
             CREATE TABLE books_series_link (book INTEGER, series INTEGER);
             CREATE TABLE ratings (id INTEGER PRIMARY KEY, rating INTEGER);
             CREATE TABLE books_ratings_link (book INTEGER, rating INTEGER);
-            CREATE TABLE books_languages_link (book INTEGER, lang_code TEXT);
+            CREATE TABLE languages (id INTEGER PRIMARY KEY, lang_code TEXT);
+            CREATE TABLE books_languages_link (book INTEGER, lang_code INTEGER);
             CREATE TABLE identifiers (book INTEGER, type TEXT, val TEXT);
             """
         )
         conn.execute(
-            "INSERT INTO books(id, title, path, isbn, uuid, pubdate, last_modified) VALUES (1, 'Book Title', 'Author Name/Book Title (1)', 'isbn', 'uuid', '2020', '2021')"
+            "INSERT INTO books(id, title, path, isbn, uuid, pubdate, last_modified) "
+            "VALUES (1, 'Book Title', 'Author Name/Book Title (1)', "
+            "'isbn', 'uuid', '2020', '2021')"
         )
         conn.execute("INSERT INTO comments(book, text) VALUES (1, 'comment')")
         conn.execute(
-            "INSERT INTO data(book, format, uncompressed_size, name) VALUES (1, 'PDF', 100, 'Book Title - Author Name')"
+            "INSERT INTO data(book, format, uncompressed_size, name) "
+            "VALUES (1, 'PDF', 100, 'Book Title - Author Name')"
         )
         conn.execute("INSERT INTO authors(id, name) VALUES (2, 'Author Name')")
         conn.execute("INSERT INTO books_authors_link(id, book, author) VALUES (1, 1, 2)")
@@ -49,7 +58,8 @@ def test_fetch_books_from_calibre_db(tmp_path: Path) -> None:
         conn.execute("INSERT INTO books_series_link(book, series) VALUES (1, 5)")
         conn.execute("INSERT INTO ratings(id, rating) VALUES (6, 8)")
         conn.execute("INSERT INTO books_ratings_link(book, rating) VALUES (1, 6)")
-        conn.execute("INSERT INTO books_languages_link(book, lang_code) VALUES (1, 'en')")
+        conn.execute("INSERT INTO languages(id, lang_code) VALUES (7, 'en')")
+        conn.execute("INSERT INTO books_languages_link(book, lang_code) VALUES (1, 7)")
         conn.execute("INSERT INTO identifiers(book, type, val) VALUES (1, 'asin', 'B123')")
         conn.commit()
     finally:

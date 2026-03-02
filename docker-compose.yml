@@ -10,13 +10,8 @@ services:
     build: .
     env_file:
       - .env
-    environment:
-      - HF_HOME=${HF_CACHE_DIR:-/hf-cache}
-      - TRANSFORMERS_CACHE=${HF_CACHE_DIR:-/hf-cache}
-      - SENTENCE_TRANSFORMERS_HOME=${HF_CACHE_DIR:-/hf-cache}
     volumes:
       - ${CALIBRE_LIBRARY_ROOT}:${CALIBRE_LIBRARY_ROOT}:ro
-      - ${HF_CACHE_HOST_DIR:-./.cache/huggingface}:${HF_CACHE_DIR:-/hf-cache}
     depends_on:
       - qdrant
 

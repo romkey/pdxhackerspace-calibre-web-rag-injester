@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
-from sentence_transformers import SentenceTransformer
 
 from calibre_web2rag.config import Settings
 
@@ -14,13 +13,25 @@ class Embedder(Protocol):
         ...
 
 
+def _load_sentence_transformer():
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        raise ImportError(
+            "sentence-transformers is not installed. "
+            "Install with: pip install calibre-web2rag[sentence-transformers]"
+        ) from None
+    return SentenceTransformer
+
+
 @dataclass
 class SentenceTransformerEmbedder:
     model_name: str
     cache_dir: str | None = None
 
     def __post_init__(self) -> None:
-        self._model = SentenceTransformer(self.model_name, cache_folder=self.cache_dir)
+        cls = _load_sentence_transformer()
+        self._model = cls(self.model_name, cache_folder=self.cache_dir)
 
     def encode(self, chunks: list[str]) -> list[list[float]]:
         vectors = self._model.encode(chunks, show_progress_bar=False)
@@ -34,7 +45,9 @@ class OllamaEmbedder:
     timeout_seconds: int
 
     def __post_init__(self) -> None:
-        self._client = httpx.Client(base_url=self.ollama_url.rstrip("/"), timeout=self.timeout_seconds)
+        self._client = httpx.Client(
+            base_url=self.ollama_url.rstrip("/"), timeout=self.timeout_seconds
+        )
 
     def encode(self, chunks: list[str]) -> list[list[float]]:
         response = self._client.post("/api/embed", json={"model": self.model_name, "input": chunks})

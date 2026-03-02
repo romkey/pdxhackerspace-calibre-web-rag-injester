@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -7,6 +8,8 @@ import mobi
 from bs4 import BeautifulSoup
 from ebooklib import ITEM_DOCUMENT, epub
 from pypdf import PdfReader
+
+from calibre_web2rag.models import TextSection
 
 
 def is_pdf_drm_free(path: Path) -> bool:
@@ -62,7 +65,50 @@ def extract_epub_text(path: Path) -> str:
 
 def extract_mobi_text(path: Path) -> str:
     tempdir, extracted = mobi.extract(str(path))
-    extracted_path = Path(tempdir) / extracted
-    data = extracted_path.read_text(encoding="utf-8", errors="ignore")
-    soup = BeautifulSoup(data, "html.parser")
-    return soup.get_text(" ", strip=True)
+    try:
+        extracted_path = Path(tempdir) / extracted
+        data = extracted_path.read_text(encoding="utf-8", errors="ignore")
+        soup = BeautifulSoup(data, "html.parser")
+        return soup.get_text(" ", strip=True)
+    finally:
+        shutil.rmtree(tempdir, ignore_errors=True)
+
+
+def extract_pdf_sections(path: Path) -> list[TextSection]:
+    text = extract_pdf_text(path)
+    if not text.strip():
+        return []
+    return [TextSection(title=None, text=text)]
+
+
+def extract_epub_sections(path: Path) -> list[TextSection]:
+    book = epub.read_epub(str(path))
+    sections: list[TextSection] = []
+    for item in book.get_items():
+        if item.get_type() != ITEM_DOCUMENT:
+            continue
+        soup = BeautifulSoup(item.get_body_content(), "html.parser")
+        title = None
+        for tag in ("h1", "h2", "h3"):
+            heading = soup.find(tag)
+            if heading:
+                title = heading.get_text(strip=True)
+                break
+        text = soup.get_text(" ", strip=True)
+        if text:
+            sections.append(TextSection(title=title, text=text))
+    return sections
+
+
+def extract_mobi_sections(path: Path) -> list[TextSection]:
+    tempdir, extracted = mobi.extract(str(path))
+    try:
+        extracted_path = Path(tempdir) / extracted
+        data = extracted_path.read_text(encoding="utf-8", errors="ignore")
+        soup = BeautifulSoup(data, "html.parser")
+        text = soup.get_text(" ", strip=True)
+        if not text:
+            return []
+        return [TextSection(title=None, text=text)]
+    finally:
+        shutil.rmtree(tempdir, ignore_errors=True)

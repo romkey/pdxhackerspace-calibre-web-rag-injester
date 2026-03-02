@@ -44,8 +44,8 @@ def load_settings() -> Settings:
         qdrant_url=os.getenv("QDRANT_URL", "http://qdrant:6333"),
         qdrant_api_key=os.getenv("QDRANT_API_KEY"),
         qdrant_collection=os.getenv("QDRANT_COLLECTION", "calibre_books"),
-        embedding_provider=os.getenv("EMBEDDING_PROVIDER", "sentence_transformers").lower(),
-        embedding_model=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
+        embedding_provider=os.getenv("EMBEDDING_PROVIDER", "ollama").lower(),
+        embedding_model=os.getenv("EMBEDDING_MODEL", "nomic-embed-text"),
         hf_cache_dir=(
             os.getenv("HF_CACHE_DIR")
             or os.getenv("SENTENCE_TRANSFORMERS_HOME")
@@ -57,5 +57,5 @@ def load_settings() -> Settings:
         chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "120")),
         batch_size=int(os.getenv("BATCH_SIZE", "64")),
         distance=os.getenv("QDRANT_DISTANCE", "cosine").lower(),
-        vector_size=int(os.getenv("VECTOR_SIZE", "384")),
+        vector_size=int(os.getenv("VECTOR_SIZE", "768")),
     )
