@@ -7,10 +7,7 @@ services:
       - qdrant_data:/qdrant/storage
 
   ingester:
-    build:
-      context: .
-      args:
-        DOCKER_INSTALL_EXTRAS: ${DOCKER_INSTALL_EXTRAS:-}
+    build: .
     env_file:
       - .env
     environment:
