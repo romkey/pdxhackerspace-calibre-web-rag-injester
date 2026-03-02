@@ -70,6 +70,7 @@ def ingest(settings: Settings) -> int:
     for batch in _generate_points(repo=repo, embedder=embedder, settings=settings):
         store.upsert(batch)
         inserted += len(batch)
+        logger.info("Upserted %s chunks to Qdrant (total=%s)", len(batch), inserted)
     return inserted
 
 
@@ -81,15 +82,30 @@ def _generate_points(
 ) -> Iterator[list[PointStruct]]:
     batch: list[PointStruct] = []
     for book in repo.fetch_books():
+        logger.info(
+            "Analyzing book id=%s title=%r files=%s",
+            book.book_id,
+            book.title,
+            len(book.files),
+        )
+        book_chunk_count = 0
         for file in book.files:
             file_path = str(file.file_path)
+            logger.info("Reading file for book id=%s format=%s path=%s", book.book_id, file.format, file_path)
             if not _drm_free(file.format, file_path):
                 logger.info("Skipping DRM-protected or unreadable file: %s", file_path)
                 continue
             text = _extract_text(file.format, file_path)
             chunks = split_text(text=text, chunk_size=settings.chunk_size, overlap=settings.chunk_overlap)
             if not chunks:
+                logger.info("No extractable text for file: %s", file_path)
                 continue
+            logger.info(
+                "Extracted %s chunks for book id=%s format=%s",
+                len(chunks),
+                book.book_id,
+                file.format,
+            )
             vectors = embedder.encode(chunks)
             for idx, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
                 source_url = build_ebook_url(
@@ -131,8 +147,15 @@ def _generate_points(
                     payload=payload,
                 )
                 batch.append(point)
+                book_chunk_count += 1
                 if len(batch) >= settings.batch_size:
                     yield batch
                     batch = []
+        logger.info(
+            "Finished book id=%s title=%r stored_chunks=%s",
+            book.book_id,
+            book.title,
+            book_chunk_count,
+        )
     if batch:
         yield batch
