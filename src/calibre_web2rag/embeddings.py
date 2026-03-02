@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
-from sentence_transformers import SentenceTransformer
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:  # pragma: no cover - exercised in container runtime configurations
+    SentenceTransformer = None  # type: ignore[assignment]
 
 from calibre_web2rag.config import Settings
 
@@ -20,6 +23,12 @@ class SentenceTransformerEmbedder:
     cache_dir: str | None = None
 
     def __post_init__(self) -> None:
+        if SentenceTransformer is None:
+            raise RuntimeError(
+                "sentence-transformers is not installed. "
+                "Install with the 'st' extra (pip install .[st]) or build Docker with "
+                "DOCKER_INSTALL_EXTRAS=st."
+            )
         self._model = SentenceTransformer(self.model_name, cache_folder=self.cache_dir)
 
     def encode(self, chunks: list[str]) -> list[list[float]]:

@@ -38,6 +38,7 @@ Common optional variables:
 - `QDRANT_COLLECTION`
 - `EMBEDDING_PROVIDER` (`sentence_transformers` or `ollama`)
 - `EMBEDDING_MODEL`
+- `DOCKER_INSTALL_EXTRAS` (set `st` if image must run `sentence_transformers`)
 - `HF_CACHE_DIR` (for Hugging Face model caching with `sentence_transformers`)
 - `HF_CACHE_HOST_DIR` (host path mapped to `HF_CACHE_DIR` in Docker)
 - `OLLAMA_URL` (if using `ollama`)
@@ -63,6 +64,13 @@ docker compose up --build ingester
 ```
 
 This starts `qdrant` and then the `ingester` service.
+
+### Build size and speed
+
+The Docker image now avoids installing `sentence-transformers` by default, which keeps builds much smaller and faster (because it avoids large `torch` dependencies).
+
+- For Ollama embeddings: leave `DOCKER_INSTALL_EXTRAS` empty.
+- For in-container sentence-transformers: set `DOCKER_INSTALL_EXTRAS=st`.
 
 ### Hugging Face model cache
 
