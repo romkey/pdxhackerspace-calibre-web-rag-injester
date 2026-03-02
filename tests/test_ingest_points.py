@@ -1,4 +1,5 @@
 from pathlib import Path
+import uuid
 
 from calibre_web2rag.config import Settings
 from calibre_web2rag.ingest import _generate_points
@@ -67,6 +68,7 @@ def test_generate_points_includes_metadata(monkeypatch, tmp_path: Path) -> None:
     batches = list(_generate_points(repo=_Repo([book]), embedder=_Embedder(), settings=settings))
     points = [point for batch in batches for point in batch]
     assert points
+    uuid.UUID(str(points[0].id))
     payload = points[0].payload
     assert payload["book_id"] == 1
     assert payload["source_url"] == "https://books.example/download/1/pdf"

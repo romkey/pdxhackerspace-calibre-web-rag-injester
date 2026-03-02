@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import logging
+import uuid
 from collections.abc import Iterator
 
 from qdrant_client.models import PointStruct
@@ -51,7 +51,8 @@ def _drm_free(fmt: str, path: str) -> bool:
 
 
 def _point_id(value: str) -> str:
-    return hashlib.sha1(value.encode("utf-8")).hexdigest()
+    # Qdrant point IDs must be uint64 or UUID; use deterministic UUID5 for stable re-ingestion.
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, value))
 
 
 def ingest(settings: Settings) -> int:
