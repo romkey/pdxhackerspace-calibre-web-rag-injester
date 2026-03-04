@@ -13,12 +13,9 @@ from calibre_web2rag.chunking import split_text
 from calibre_web2rag.config import Settings
 from calibre_web2rag.embeddings import Embedder, build_embedder
 from calibre_web2rag.extractors import (
-    extract_epub_sections,
-    extract_mobi_sections,
-    extract_pdf_sections,
-    is_epub_drm_free,
-    is_mobi_drm_free,
-    is_pdf_drm_free,
+    try_extract_epub_sections,
+    try_extract_mobi_sections,
+    try_extract_pdf_sections,
 )
 from calibre_web2rag.links import build_ebook_url, build_opds_url
 from calibre_web2rag.models import BookRecord, TextSection
@@ -27,30 +24,18 @@ from calibre_web2rag.qdrant_store import QdrantStore
 logger = logging.getLogger(__name__)
 
 
-def _extract_sections(fmt: str, path: str) -> list[TextSection]:
+def _safe_extract_sections(fmt: str, path: str) -> list[TextSection]:
+    """Combined DRM-check and extraction in a single pass per format."""
     from pathlib import Path
 
     p = Path(path)
     if fmt == "PDF":
-        return extract_pdf_sections(p)
+        return try_extract_pdf_sections(p)
     if fmt == "EPUB":
-        return extract_epub_sections(p)
+        return try_extract_epub_sections(p)
     if fmt == "MOBI":
-        return extract_mobi_sections(p)
+        return try_extract_mobi_sections(p)
     return []
-
-
-def _drm_free(fmt: str, path: str) -> bool:
-    from pathlib import Path
-
-    p = Path(path)
-    if fmt == "PDF":
-        return is_pdf_drm_free(p)
-    if fmt == "EPUB":
-        return is_epub_drm_free(p)
-    if fmt == "MOBI":
-        return is_mobi_drm_free(p)
-    return False
 
 
 def _point_id(value: str) -> str:
@@ -298,8 +283,8 @@ def _process_book(
     )
 
     # Per-book metadata point for catalog queries
-    metadata_text = _build_book_metadata_text(book)
-    vector = embedder.encode([_contextualize(book, metadata_text)])[0]
+    metadata_text = _contextualize(book, _build_book_metadata_text(book))
+    vector = embedder.encode([metadata_text])[0]
     points.append(
         _build_point(
             book=book,
@@ -327,7 +312,9 @@ def _process_book(
         if desc_chunks:
             contextualized = [_contextualize(book, c) for c in desc_chunks]
             vectors = embedder.encode(contextualized)
-            for idx, (chunk, vec) in enumerate(zip(desc_chunks, vectors, strict=True)):
+            for idx, (ctx_chunk, vec) in enumerate(
+                zip(contextualized, vectors, strict=True)
+            ):
                 points.append(
                     _build_point(
                         book=book,
@@ -335,7 +322,7 @@ def _process_book(
                         file_name=None,
                         file_path=None,
                         chapter_title=None,
-                        chunk=chunk,
+                        chunk=ctx_chunk,
                         chunk_index=idx,
                         total_chunks=len(desc_chunks),
                         chunk_type="description",
@@ -358,11 +345,13 @@ def _process_book(
             file.format,
             file_path,
         )
-        if not _drm_free(file.format, file_path):
-            logger.info("Skipping DRM-protected or unreadable file: %s", file_path)
+        sections = _safe_extract_sections(file.format, file_path)
+        if not sections:
+            logger.info(
+                "Skipping unreadable or empty file: %s", file_path
+            )
             continue
 
-        sections = _extract_sections(file.format, file_path)
         all_items: list[tuple[str | None, str]] = []
         for section in sections:
             section_chunks = split_text(
@@ -390,8 +379,8 @@ def _process_book(
         ]
         vectors = embedder.encode(contextualized)
 
-        for idx, ((chapter_title, chunk), vec) in enumerate(
-            zip(all_items, vectors, strict=True)
+        for idx, ((chapter_title, _raw), ctx_chunk, vec) in enumerate(
+            zip(all_items, contextualized, vectors, strict=True)
         ):
             points.append(
                 _build_point(
@@ -400,7 +389,7 @@ def _process_book(
                     file_name=file.file_name,
                     file_path=file_path,
                     chapter_title=chapter_title,
-                    chunk=chunk,
+                    chunk=ctx_chunk,
                     chunk_index=idx,
                     total_chunks=len(all_items),
                     chunk_type="content",

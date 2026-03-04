@@ -53,13 +53,13 @@ def split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
         if sent_len > chunk_size:
             if current:
                 chunks.append(" ".join(current))
-                current = _overlap_tail(current, overlap)
-                current_len = _joined_length(current)
             step = chunk_size - overlap
             for pos in range(0, sent_len, step):
                 piece = sentence[pos : pos + chunk_size]
                 if piece:
                     chunks.append(piece)
+            current = []
+            current_len = 0
             continue
 
         new_len = current_len + (1 if current else 0) + sent_len

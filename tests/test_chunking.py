@@ -39,6 +39,17 @@ def test_split_text_single_long_sentence_fallback() -> None:
     assert chunks[0][-10:] == chunks[1][:10]
 
 
+def test_long_sentence_does_not_carry_stale_overlap() -> None:
+    short = "Short."
+    long_sent = "x" * 200 + "."
+    after = "After."
+    text = f"{short} {long_sent} {after}"
+    chunks = split_text(text, chunk_size=50, overlap=10)
+    last_chunk = chunks[-1]
+    assert last_chunk == "After."
+    assert "Short." not in last_chunk
+
+
 def test_split_text_empty_input() -> None:
     assert split_text("", chunk_size=100, overlap=10) == []
     assert split_text("   ", chunk_size=100, overlap=10) == []

@@ -112,3 +112,78 @@ def extract_mobi_sections(path: Path) -> list[TextSection]:
         return [TextSection(title=None, text=text)]
     finally:
         shutil.rmtree(tempdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Combined DRM-check + extraction (single-pass per format)
+# ---------------------------------------------------------------------------
+
+
+def try_extract_pdf_sections(path: Path) -> list[TextSection]:
+    """Check DRM and extract in one pass, creating PdfReader only once."""
+    try:
+        reader = PdfReader(str(path))
+        if reader.is_encrypted:
+            return []
+        text = "\n".join(
+            (page.extract_text() or "") for page in reader.pages
+        )
+        if not text.strip():
+            return []
+        return [TextSection(title=None, text=text)]
+    except Exception:
+        return []
+
+
+def try_extract_epub_sections(path: Path) -> list[TextSection]:
+    """Check DRM via ZipFile, then extract sections if clean."""
+    try:
+        with ZipFile(path, "r") as archive:
+            names = {name.lower() for name in archive.namelist()}
+            if "meta-inf/encryption.xml" in names:
+                data = archive.read("META-INF/encryption.xml")
+                if len(data.strip()) > 0:
+                    return []
+    except Exception:
+        return []
+
+    try:
+        book = epub.read_epub(str(path))
+        sections: list[TextSection] = []
+        for item in book.get_items():
+            if item.get_type() != ITEM_DOCUMENT:
+                continue
+            soup = BeautifulSoup(item.get_body_content(), "html.parser")
+            title = None
+            for tag in ("h1", "h2", "h3"):
+                heading = soup.find(tag)
+                if heading:
+                    title = heading.get_text(strip=True)
+                    break
+            text = soup.get_text(" ", strip=True)
+            if text:
+                sections.append(TextSection(title=title, text=text))
+        return sections
+    except Exception:
+        return []
+
+
+def try_extract_mobi_sections(path: Path) -> list[TextSection]:
+    """Attempt extraction directly instead of relying on the fragile
+    16-byte header DRM check, which is unreliable for KFX-format files."""
+    try:
+        tempdir, extracted = mobi.extract(str(path))
+        try:
+            extracted_path = Path(tempdir) / extracted
+            data = extracted_path.read_text(
+                encoding="utf-8", errors="ignore"
+            )
+            soup = BeautifulSoup(data, "html.parser")
+            text = soup.get_text(" ", strip=True)
+            if not text:
+                return []
+            return [TextSection(title=None, text=text)]
+        finally:
+            shutil.rmtree(tempdir, ignore_errors=True)
+    except Exception:
+        return []

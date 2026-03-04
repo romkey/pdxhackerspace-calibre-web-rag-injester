@@ -1,7 +1,12 @@
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from calibre_web2rag.extractors import is_epub_drm_free, is_mobi_drm_free
+from calibre_web2rag.extractors import (
+    is_epub_drm_free,
+    is_mobi_drm_free,
+    try_extract_mobi_sections,
+    try_extract_pdf_sections,
+)
 
 
 def test_epub_drm_free_when_encryption_manifest_missing(tmp_path: Path) -> None:
@@ -25,3 +30,19 @@ def test_mobi_drm_detection(tmp_path: Path) -> None:
     encrypted.write_bytes(b"\x00" * 12 + b"\x00\x01" + b"\x00" * 4)
     assert is_mobi_drm_free(plain)
     assert not is_mobi_drm_free(encrypted)
+
+
+def test_try_extract_mobi_returns_empty_on_bad_file(
+    tmp_path: Path,
+) -> None:
+    bad = tmp_path / "garbage.mobi"
+    bad.write_bytes(b"not a real mobi file")
+    assert try_extract_mobi_sections(bad) == []
+
+
+def test_try_extract_pdf_returns_empty_on_bad_file(
+    tmp_path: Path,
+) -> None:
+    bad = tmp_path / "garbage.pdf"
+    bad.write_bytes(b"not a real pdf file")
+    assert try_extract_pdf_sections(bad) == []

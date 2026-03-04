@@ -78,9 +78,8 @@ def test_generate_points_includes_metadata(monkeypatch, tmp_path: Path) -> None:
         files=[CalibreFile(format="PDF", file_path=pdf, file_name="Title", size_bytes=100)],
     )
 
-    monkeypatch.setattr("calibre_web2rag.ingest._drm_free", lambda fmt, path: True)
     monkeypatch.setattr(
-        "calibre_web2rag.ingest._extract_sections",
+        "calibre_web2rag.ingest._safe_extract_sections",
         lambda fmt, path: [TextSection(title=None, text="hello world " * 50)],
     )
 
@@ -173,9 +172,8 @@ def test_chapter_title_from_sections(monkeypatch, tmp_path: Path) -> None:
         files=[CalibreFile(format="PDF", file_path=pdf, file_name="Chaptered", size_bytes=100)],
     )
 
-    monkeypatch.setattr("calibre_web2rag.ingest._drm_free", lambda fmt, path: True)
     monkeypatch.setattr(
-        "calibre_web2rag.ingest._extract_sections",
+        "calibre_web2rag.ingest._safe_extract_sections",
         lambda fmt, path: [
             TextSection(title="Chapter 1", text="First chapter content here."),
             TextSection(title="Chapter 2", text="Second chapter content here."),
@@ -242,8 +240,9 @@ def test_per_book_error_isolation(monkeypatch, tmp_path: Path) -> None:
             raise RuntimeError("Simulated extraction failure")
         return [TextSection(title=None, text="good content here for testing")]
 
-    monkeypatch.setattr("calibre_web2rag.ingest._drm_free", lambda fmt, path: True)
-    monkeypatch.setattr("calibre_web2rag.ingest._extract_sections", _mock_sections)
+    monkeypatch.setattr(
+        "calibre_web2rag.ingest._safe_extract_sections", _mock_sections
+    )
 
     settings = _make_settings(tmp_path, chunk_size=200, chunk_overlap=20)
 
