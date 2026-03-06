@@ -25,6 +25,7 @@ class Settings:
     batch_size: int
     distance: str
     vector_size: int
+    embedding_context_length: int
 
 
 def _get_required(name: str) -> str:
@@ -58,4 +59,7 @@ def load_settings() -> Settings:
         batch_size=int(os.getenv("BATCH_SIZE", "64")),
         distance=os.getenv("QDRANT_DISTANCE", "cosine").lower(),
         vector_size=int(os.getenv("VECTOR_SIZE", "768")),
+        embedding_context_length=int(
+            os.getenv("EMBEDDING_CONTEXT_LENGTH", "8192")
+        ),
     )

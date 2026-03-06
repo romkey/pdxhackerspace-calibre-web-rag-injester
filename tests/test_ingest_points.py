@@ -42,6 +42,7 @@ def _make_settings(tmp_path: Path, **overrides) -> Settings:
         batch_size=100,
         distance="cosine",
         vector_size=3,
+        embedding_context_length=8192,
     )
     defaults.update(overrides)
     return Settings(**defaults)

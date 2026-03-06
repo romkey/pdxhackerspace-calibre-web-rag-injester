@@ -1,5 +1,10 @@
 from calibre_web2rag.config import Settings
-from calibre_web2rag.embeddings import OllamaEmbedder, SentenceTransformerEmbedder, build_embedder
+from calibre_web2rag.embeddings import (
+    OllamaEmbedder,
+    SentenceTransformerEmbedder,
+    _truncate,
+    build_embedder,
+)
 
 
 class _FakeResponse:
@@ -61,9 +66,11 @@ def test_build_embedder_uses_ollama_provider(monkeypatch) -> None:
         batch_size=10,
         distance="cosine",
         vector_size=2,
+        embedding_context_length=8192,
     )
     embedder = build_embedder(settings)
     assert isinstance(embedder, OllamaEmbedder)
+    assert embedder.max_tokens == 8192
 
 
 def test_build_embedder_uses_st_cache_directory(monkeypatch) -> None:
@@ -89,7 +96,22 @@ def test_build_embedder_uses_st_cache_directory(monkeypatch) -> None:
         batch_size=10,
         distance="cosine",
         vector_size=2,
+        embedding_context_length=8192,
     )
     embedder = build_embedder(settings)
     assert isinstance(embedder, SentenceTransformerEmbedder)
     assert embedder._model.cache_folder == "/tmp/hf-cache"
+
+
+def test_truncate_shortens_long_texts() -> None:
+    short = "hello"
+    long_text = "x" * 100
+    result = _truncate([short, long_text], max_tokens=10)
+    assert result[0] == short
+    assert len(result[1]) == 10 * 4  # _CHARS_PER_TOKEN = 4
+
+
+def test_truncate_noop_when_disabled() -> None:
+    long_text = "x" * 100
+    result = _truncate([long_text], max_tokens=0)
+    assert result[0] == long_text
