@@ -70,12 +70,20 @@ class SentenceTransformerEmbedder:
 class OllamaEmbedder:
     model_name: str
     ollama_url: str
+    api_key: str | None
     timeout_seconds: int
     max_tokens: int = 0
 
     def __post_init__(self) -> None:
+        headers = (
+            {"Authorization": f"Bearer {self.api_key}"}
+            if self.api_key
+            else None
+        )
         self._client = httpx.Client(
-            base_url=self.ollama_url.rstrip("/"), timeout=self.timeout_seconds
+            base_url=self.ollama_url.rstrip("/"),
+            headers=headers,
+            timeout=self.timeout_seconds,
         )
 
     def encode(self, chunks: list[str]) -> list[list[float]]:
@@ -107,6 +115,7 @@ def build_embedder(settings: Settings) -> Embedder:
         return OllamaEmbedder(
             model_name=settings.embedding_model,
             ollama_url=settings.ollama_url,
+            api_key=settings.ollama_api_key,
             timeout_seconds=settings.ollama_timeout_seconds,
             max_tokens=ctx,
         )

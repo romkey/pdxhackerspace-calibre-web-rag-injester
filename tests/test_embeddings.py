@@ -16,8 +16,15 @@ class _FakeResponse:
 
 
 class _FakeClient:
-    def __init__(self, base_url: str, timeout: int) -> None:  # noqa: ARG002
-        pass
+    headers: dict | None = None
+
+    def __init__(
+        self,
+        base_url: str,  # noqa: ARG002
+        headers: dict | None,
+        timeout: int,  # noqa: ARG002
+    ) -> None:
+        self.__class__.headers = headers
 
     def post(self, path: str, json: dict) -> _FakeResponse:  # noqa: A002
         assert path == "/api/embed"
@@ -39,6 +46,7 @@ def test_ollama_embedder_calls_embed_api(monkeypatch) -> None:
     embedder = OllamaEmbedder(
         model_name="nomic-embed-text",
         ollama_url="http://ollama:11434",
+        api_key=None,
         timeout_seconds=30,
     )
     vectors = embedder.encode(["a", "b"])
@@ -60,6 +68,7 @@ def test_build_embedder_uses_ollama_provider(monkeypatch) -> None:
         embedding_model="nomic-embed-text",
         hf_cache_dir=None,
         ollama_url="http://ollama:11434",
+        ollama_api_key=None,
         ollama_timeout_seconds=30,
         chunk_size=1000,
         chunk_overlap=100,
@@ -90,6 +99,7 @@ def test_build_embedder_uses_st_cache_directory(monkeypatch) -> None:
         embedding_model="sentence-transformers/all-MiniLM-L6-v2",
         hf_cache_dir="/tmp/hf-cache",
         ollama_url="http://ollama:11434",
+        ollama_api_key=None,
         ollama_timeout_seconds=30,
         chunk_size=1000,
         chunk_overlap=100,
@@ -101,6 +111,17 @@ def test_build_embedder_uses_st_cache_directory(monkeypatch) -> None:
     embedder = build_embedder(settings)
     assert isinstance(embedder, SentenceTransformerEmbedder)
     assert embedder._model.cache_folder == "/tmp/hf-cache"
+
+
+def test_ollama_embedder_uses_api_key_header(monkeypatch) -> None:
+    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
+    OllamaEmbedder(
+        model_name="nomic-embed-text",
+        ollama_url="http://ollama:11434",
+        api_key="secret",
+        timeout_seconds=30,
+    )
+    assert _FakeClient.headers == {"Authorization": "Bearer secret"}
 
 
 def test_truncate_shortens_long_texts() -> None:

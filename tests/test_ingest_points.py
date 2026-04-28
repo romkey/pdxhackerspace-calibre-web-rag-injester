@@ -36,6 +36,7 @@ def _make_settings(tmp_path: Path, **overrides) -> Settings:
         embedding_model="dummy",
         hf_cache_dir=None,
         ollama_url="http://localhost:11434",
+        ollama_api_key=None,
         ollama_timeout_seconds=30,
         chunk_size=40,
         chunk_overlap=10,

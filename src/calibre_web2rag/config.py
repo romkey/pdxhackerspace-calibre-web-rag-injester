@@ -19,6 +19,7 @@ class Settings:
     embedding_model: str
     hf_cache_dir: str | None
     ollama_url: str
+    ollama_api_key: str | None
     ollama_timeout_seconds: int
     chunk_size: int
     chunk_overlap: int
@@ -53,6 +54,7 @@ def load_settings() -> Settings:
             or os.getenv("HF_HOME")
         ),
         ollama_url=os.getenv("OLLAMA_URL", "http://ollama:11434"),
+        ollama_api_key=os.getenv("OLLAMA_API_KEY"),
         ollama_timeout_seconds=int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
         chunk_size=int(os.getenv("CHUNK_SIZE", "1200")),
         chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "120")),
