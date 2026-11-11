@@ -1,22 +1,17 @@
-.PHONY: install-dev lint test ingest compose-up compose-ollama compose-test
+# Shortcuts for the commands in README.md. Everything runs in Docker.
+.PHONY: up test lint secrets prod-build
 
-install-dev:
-	pip install -e .[dev]
-
-lint:
-	ruff check .
+up:
+	docker compose up --build
 
 test:
-	pytest -q
+	docker compose -f docker-compose.test.yaml run --rm test
 
-ingest:
-	calibre-web2rag
+lint:
+	docker compose -f docker-compose.lint.yaml run --rm lint
 
-compose-up:
-	docker compose up --build ingester
+secrets:
+	docker compose -f docker-compose.lint.yaml run --rm secrets
 
-compose-ollama:
-	docker compose -f docker-compose.yml -f docker-compose.ollama.yml up --build ingester
-
-compose-test:
-	docker compose -f docker-compose.test.yml up --build --abort-on-container-exit tests
+prod-build:
+	docker compose -f docker-compose.prod.yaml build

@@ -1,0 +1,51 @@
+# Override: Ollama embeddings on an NVIDIA GPU. Use with either the
+# development or the production compose file:
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.ollama.yaml up --build
+#   docker compose -f docker-compose.prod.yaml -f docker-compose.ollama.yaml up -d
+#
+# GPU passthrough needs Linux and the NVIDIA container toolkit.
+
+services:
+  ollama:
+    image: ollama/ollama:0.40.16
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Pulls EMBEDDING_MODEL into Ollama before the ingester starts.
+  ollama-pull:
+    image: curlimages/curl:8.23.0
+    depends_on:
+      - ollama
+    environment:
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+    command:
+      - sh
+      - -c
+      - >-
+        until curl -fsS http://ollama:11434/api/version >/dev/null; do sleep 1; done &&
+        curl -fsS -X POST http://ollama:11434/api/pull
+        -H 'Content-Type: application/json'
+        -d "{\"model\":\"$$EMBEDDING_MODEL\"}"
+
+  app:
+    environment:
+      EMBEDDING_PROVIDER: ollama
+      OLLAMA_URL: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_started
+      ollama-pull:
+        condition: service_completed_successfully
+
+volumes:
+  ollama-data:
