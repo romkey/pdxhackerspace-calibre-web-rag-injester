@@ -5,7 +5,7 @@ services:
       - "6334:6333"
 
   tests:
-    image: python:3.11-slim
+    image: python:3.15-slim
     working_dir: /workspace
     env_file:
       - .env

@@ -1,3 +1,5 @@
+import pytest
+
 from calibre_web2rag.chunking import split_text
 
 
@@ -53,3 +55,8 @@ def test_long_sentence_does_not_carry_stale_overlap() -> None:
 def test_split_text_empty_input() -> None:
     assert split_text("", chunk_size=100, overlap=10) == []
     assert split_text("   ", chunk_size=100, overlap=10) == []
+
+
+def test_split_text_validates_chunk_size() -> None:
+    with pytest.raises(ValueError, match="chunk_size"):
+        split_text("Some text.", chunk_size=0, overlap=0)

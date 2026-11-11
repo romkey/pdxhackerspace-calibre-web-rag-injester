@@ -61,6 +61,20 @@ def test_fetch_books_from_calibre_db(tmp_path: Path) -> None:
         conn.execute("INSERT INTO languages(id, lang_code) VALUES (7, 'en')")
         conn.execute("INSERT INTO books_languages_link(book, lang_code) VALUES (1, 7)")
         conn.execute("INSERT INTO identifiers(book, type, val) VALUES (1, 'asin', 'B123')")
+        # Book 2: only an unsupported format and a supported format whose file is missing.
+        # Book 3: no files at all. Neither should be returned.
+        conn.execute(
+            "INSERT INTO books(id, title, path, isbn, uuid, pubdate, last_modified) "
+            "VALUES (2, 'Other', 'Author Name/Other (2)', NULL, 'u2', NULL, NULL)"
+        )
+        conn.execute(
+            "INSERT INTO data(book, format, uncompressed_size, name) "
+            "VALUES (2, 'AZW3', 100, 'Other'), (2, 'EPUB', 100, 'Other')"
+        )
+        conn.execute(
+            "INSERT INTO books(id, title, path, isbn, uuid, pubdate, last_modified) "
+            "VALUES (3, 'Empty', 'Author Name/Empty (3)', NULL, 'u3', NULL, NULL)"
+        )
         conn.commit()
     finally:
         conn.close()

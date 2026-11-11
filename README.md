@@ -1,5 +1,10 @@
 # calibre-web2rag
 
+[![CI](https://img.shields.io/github/actions/workflow/status/romkey/pdxhackerspace-calibre-web-rag-injester/ci.yml?branch=main&label=CI&logo=github)](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/ci.yml)
+[![Lint](https://img.shields.io/github/actions/workflow/status/romkey/pdxhackerspace-calibre-web-rag-injester/lint.yml?branch=main&label=lint&logo=ruff)](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/lint.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.13%20%7C%203.14%20%7C%203.15-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
+
 `calibre-web2rag` ingests Calibre library content and metadata into Qdrant for RAG workloads.
 
 It reads Calibre metadata from `metadata.db`, ingests DRM-free `PDF`, `EPUB`, and `MOBI` files, extracts text, chunks it, creates embeddings, and upserts points with rich payload metadata (authors, tags, identifiers, file links, and Calibre Web URLs where configured).
@@ -109,6 +114,12 @@ pip install -e .[dev]
 pytest -q
 ```
 
+With coverage (CI fails below 95%):
+
+```bash
+pytest -q --cov
+```
+
 ## Run tests with test compose file
 
 ```bash
@@ -129,6 +140,11 @@ scripts/tag-release.sh 0.1.0
 git push origin main --tags
 ```
 
+## Continuous integration
+
+- `.github/workflows/ci.yml`: runs the test suite with coverage on Python 3.13, 3.14, and 3.15.
+- `.github/workflows/lint.yml`: runs `ruff check`.
+
 ## Docker image publishing on GitHub
 
 GitHub Actions workflow at `.github/workflows/docker-publish.yml`:
@@ -137,3 +153,7 @@ GitHub Actions workflow at `.github/workflows/docker-publish.yml`:
 - On semver tag push (for example `v1.2.3`): also publishes version tags.
 
 The `latest` tag is always updated from `main`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
