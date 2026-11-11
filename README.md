@@ -1,159 +1,167 @@
 # calibre-web2rag
 
-[![CI](https://img.shields.io/github/actions/workflow/status/romkey/pdxhackerspace-calibre-web-rag-injester/ci.yml?branch=main&label=CI&logo=github)](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/ci.yml)
-[![Lint](https://img.shields.io/github/actions/workflow/status/romkey/pdxhackerspace-calibre-web-rag-injester/lint.yml?branch=main&label=lint&logo=ruff)](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/lint.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.13%20%7C%203.14%20%7C%203.15-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![CI](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/ci.yaml/badge.svg)](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/ci.yaml)
+[![Lint](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/lint.yaml/badge.svg)](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/lint.yaml)
+[![Python 3.15](https://img.shields.io/badge/python-3.15-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`calibre-web2rag` ingests Calibre library content and metadata into Qdrant for RAG workloads.
+`calibre-web2rag` turns a Calibre ebook library into a Qdrant vector
+collection for retrieval-augmented generation (RAG). It reads book metadata
+straight from Calibre's `metadata.db`, extracts the text of DRM-free PDF,
+EPUB and MOBI files, splits it into overlapping sentence-aware chunks,
+embeds them with Ollama or sentence-transformers, and upserts them with rich
+payloads (authors, tags, series, identifiers, chapter titles, and links
+back to Calibre Web), so an LLM can answer both "what does this book say
+about X?" and "which books do I have by Y?".
 
-It reads Calibre metadata from `metadata.db`, ingests DRM-free `PDF`, `EPUB`, and `MOBI` files, extracts text, chunks it, creates embeddings, and upserts points with rich payload metadata (authors, tags, identifiers, file links, and Calibre Web URLs where configured).
+> **AI disclosure:** This project was written by AI under human oversight,
+> following [these rules](https://github.com/romkey/python-ai-rules/blob/main/RULES.md).
 
-## Features
+## What's here
 
-- Reads Calibre metadata directly from SQLite.
-- Includes book metadata, identifiers, tags, publisher, series, languages, and comments in payloads.
-- Adds ebook links:
-  - `source_url` from `CALIBRE_WEB_DOWNLOAD_URL_TEMPLATE` or `CALIBRE_WEB_BASE_URL`.
-  - `opds_url` from `CALIBRE_WEB_BASE_URL`.
-- Skips files that appear DRM-protected.
-- Uses Qdrant as the vector store.
-- Supports embeddings via local SentenceTransformers or Ollama (`EMBEDDING_PROVIDER`).
-- Runs via Docker/Compose.
-- Includes local + Docker-based tests.
-- Uses semantic versioning (`MAJOR.MINOR.PATCH`) and Git tags (`vMAJOR.MINOR.PATCH`).
+| Path | What it is |
+|------|------------|
+| `src/calibre_web2rag/__main__.py` | Command line: logging, SIGTERM handling, exit codes |
+| `src/calibre_web2rag/config.py` | Settings from environment variables, validated at startup |
+| `src/calibre_web2rag/calibre_db.py` | Reads books and their files from Calibre's SQLite database |
+| `src/calibre_web2rag/extractors.py` | DRM checks and text extraction for PDF, EPUB and MOBI |
+| `src/calibre_web2rag/chunking.py` | Sentence-aware chunking with overlap |
+| `src/calibre_web2rag/embeddings.py` | Ollama and sentence-transformers embedders |
+| `src/calibre_web2rag/ingest.py` | Builds points and payloads and drives the run |
+| `src/calibre_web2rag/qdrant_store.py` | Creates the collection and payload indexes, upserts points |
+| `src/calibre_web2rag/links.py` | Calibre Web download and OPDS links |
+| `tests/` | pytest tests, one file per module |
+| `docs/configuration.md` | Every environment variable |
+| `docs/overview.md` | Short architecture summary |
 
-## Configuration
+## Technical details
 
-All configuration is done by environment variables outside the container.
+The ingester is a batch job: each run reads the whole library, upserts
+into Qdrant and exits. Point IDs are deterministic (UUID5 of book, format,
+chunk index and text), so re-running updates points in place instead of
+duplicating them. Run it again, by hand or from cron, to pick up new books.
 
-1. Copy `.env.example` to `.env`.
-2. Fill paths and endpoints.
+For each book with at least one PDF, EPUB or MOBI file it writes:
 
-Required:
+- a `book_metadata` point: title, authors, publisher, series, tags,
+  languages, ISBN, rating, formats and description, for catalog questions;
+- `description` points from the Calibre comments;
+- `content` points from each file's text. EPUB chapters keep their
+  heading as `chapter_title`. Each chunk is prefixed with the book's title,
+  authors, tags and series so its embedding carries that context.
 
-- `CALIBRE_METADATA_DB`
-- `CALIBRE_LIBRARY_ROOT`
+It also writes `library_summary` points describing the whole collection
+(counts of books, authors, formats, languages, categories and series).
 
-Common optional variables:
+Every payload has `chunk_type` and `chunk_text`, plus the book's metadata,
+`source_url` (from `CALIBRE_WEB_DOWNLOAD_URL_TEMPLATE` or
+`CALIBRE_WEB_BASE_URL`) and `opds_url`. Keyword payload indexes are created
+on `authors`, `tags`, `languages`, `series`, `publisher` and `chunk_type`,
+and an integer index on `book_id`, for filtered search.
 
-- `CALIBRE_WEB_BASE_URL`
-- `CALIBRE_WEB_DOWNLOAD_URL_TEMPLATE`
-- `QDRANT_URL`
-- `QDRANT_COLLECTION`
-- `EMBEDDING_PROVIDER` (`sentence_transformers` or `ollama`)
-- `EMBEDDING_MODEL`
-- `HF_CACHE_DIR` (for Hugging Face model caching with `sentence_transformers`)
-- `HF_CACHE_HOST_DIR` (host path mapped to `HF_CACHE_DIR` in Docker)
-- `OLLAMA_URL` (if using `ollama`)
-- `CHUNK_SIZE`
-- `CHUNK_OVERLAP`
-- `BATCH_SIZE`
+Encrypted PDFs and EPUBs with an `encryption.xml` manifest are skipped as
+DRM-protected; MOBI files are skipped if they can't be unpacked. A file or
+book that fails is logged and skipped without stopping the run. Texts
+longer than the embedding model's context (`EMBEDDING_CONTEXT_LENGTH`) are
+truncated.
 
-## Run locally
+Command line:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-cp .env.example .env
+calibre-web2rag            # ingest, configured by environment variables
+calibre-web2rag --version
+```
+
+Exit codes: 0 on success (including a clean stop on SIGTERM, which ends
+after the batch in flight), 1 if ingestion fails, 2 for invalid
+configuration.
+
+## Running it
+
+Requires Docker. Configuration comes from environment variables, kept in
+`.env` (see [docs/configuration.md](docs/configuration.md)):
+
+```bash
+cp .env.example .env   # then edit it: at least CALIBRE_METADATA_DB and CALIBRE_LIBRARY_ROOT
+docker compose -f docker-compose.prod.yaml up -d
+```
+
+That starts Qdrant (on port 6333) and runs the latest release of
+`ghcr.io/romkey/pdxhackerspace-calibre-web-rag-injester` once against it,
+with your library mounted read-only. Set `APP_VERSION=X.Y.Z` to pin a
+release. To ingest again:
+
+```bash
+docker compose -f docker-compose.prod.yaml run --rm app
+```
+
+The default embedding provider is Ollama at `http://ollama:11434`. To run
+Ollama alongside it on an NVIDIA GPU (Linux with the NVIDIA container
+toolkit), add the override file; it pulls `EMBEDDING_MODEL` first:
+
+```bash
+docker compose -f docker-compose.prod.yaml -f docker-compose.ollama.yaml up -d
+```
+
+Make sure `VECTOR_SIZE` matches your embedding model's dimension
+(`nomic-embed-text`: 768).
+
+### With pip
+
+Needs Python 3.15 or newer. Install into a virtual environment, from a
+release's wheel:
+
+```bash
+python3 -m venv ~/.venvs/calibre-web2rag
+~/.venvs/calibre-web2rag/bin/pip install https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/releases/download/vX.Y.Z/calibre_web2rag-X.Y.Z-py3-none-any.whl
+~/.venvs/calibre-web2rag/bin/calibre-web2rag --version
+```
+
+For local sentence-transformers embeddings instead of Ollama, install the
+extra (`pip install "calibre-web2rag[sentence-transformers] @ <wheel URL>"`)
+and set `EMBEDDING_PROVIDER=sentence_transformers`. Set the environment
+variables yourself, or put them in a `.env` in the directory you run it
+from.
+
+## Development
+
+With Docker, nothing else to install:
+
+```bash
+cp .env.example .env                                       # then edit it
+docker compose up --build                                  # run from the working tree, with Qdrant
+docker compose -f docker-compose.test.yaml run --rm test   # tests with coverage
+docker compose -f docker-compose.lint.yaml run --rm lint   # every lint check, as CI runs them
+```
+
+With [uv](https://docs.astral.sh/uv/), which installs the exact versions
+CI tests (`uv.lock`):
+
+```bash
+uv sync
+uv run pytest
+uv run mypy
+uv run calibre-web2rag
+```
+
+With pip (25.1 or newer, for `--group`). pip doesn't read `uv.lock`, so it
+may pick newer dependency versions than CI tested:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e . --group dev
+pytest
+mypy
 calibre-web2rag
 ```
 
-## Run with Docker Compose
+Either way, `uvx pre-commit install` (or `pip install pre-commit &&
+pre-commit install`) runs the lint checks on every commit.
 
-```bash
-cp .env.example .env
-docker compose up --build ingester
-```
-
-This starts `qdrant` and then the `ingester` service.
-
-### Build size and speed
-
-The image keeps runtime libraries installed, including `sentence-transformers`.
-To keep builds predictable while avoiding repeated model downloads, use the Hugging Face cache mount (`HF_CACHE_HOST_DIR` -> `HF_CACHE_DIR`).
-
-### Hugging Face model cache
-
-If you use `sentence_transformers`, model downloads are cacheable and reusable:
-
-- Local runs: set `HF_CACHE_DIR` (or `HF_HOME` / `TRANSFORMERS_CACHE` / `SENTENCE_TRANSFORMERS_HOME`).
-- Docker runs: `docker-compose.yml` maps `HF_CACHE_HOST_DIR` on the host to `HF_CACHE_DIR` in the container.
-
-Example:
-
-```bash
-HF_CACHE_HOST_DIR=~/.cache/huggingface
-HF_CACHE_DIR=/hf-cache
-```
-
-## Run with Ollama embeddings (GPU-friendly)
-
-For higher embedding throughput, run with Ollama and set:
-
-- `EMBEDDING_PROVIDER=ollama`
-- `EMBEDDING_MODEL=nomic-embed-text` (or another Ollama embedding model)
-
-Then run:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.ollama.yml up --build ingester
-```
-
-Notes:
-
-- The Ollama override includes a model pull helper service.
-- GPU passthrough configuration is primarily for Linux + NVIDIA Docker setups.
-- Ensure `VECTOR_SIZE` matches your embedding model dimension.
-
-## Run tests locally
-
-```bash
-pip install -e .[dev]
-pytest -q
-```
-
-With coverage (CI fails below 95%):
-
-```bash
-pytest -q --cov
-```
-
-## Run tests with test compose file
-
-```bash
-cp .env.example .env
-docker compose -f docker-compose.test.yml up --build --abort-on-container-exit tests
-```
-
-## Semantic versioning and tags
-
-- Version follows semver.
-- Tag release commits with `vX.Y.Z`.
-
-Example:
-
-```bash
-git commit -m "release: v0.1.0"
-scripts/tag-release.sh 0.1.0
-git push origin main --tags
-```
-
-## Continuous integration
-
-- `.github/workflows/ci.yml`: runs the test suite with coverage on Python 3.13, 3.14, and 3.15.
-- `.github/workflows/lint.yml`: runs `ruff check`.
-
-## Docker image publishing on GitHub
-
-GitHub Actions workflow at `.github/workflows/docker-publish.yml`:
-
-- On push to `main`: builds and publishes `ghcr.io/<owner>/<repo>:latest`.
-- On semver tag push (for example `v1.2.3`): also publishes version tags.
-
-The `latest` tag is always updated from `main`.
+Releases: run the **Release** workflow from the Actions tab, pick the bump,
+and merge the release PR it opens; see `CHANGELOG.md`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE)
