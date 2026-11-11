@@ -22,4 +22,7 @@ def test_build_url_from_base_url() -> None:
 
 
 def test_build_opds_url() -> None:
-    assert build_opds_url(book_id=9, base_url="https://books.example") == "https://books.example/opds/book/9"
+    assert (
+        build_opds_url(book_id=9, base_url="https://books.example")
+        == "https://books.example/opds/book/9"
+    )

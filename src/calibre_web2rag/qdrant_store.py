@@ -73,8 +73,10 @@ class QdrantStore:
                     field_name=field_name,
                     field_schema=schema_type,
                 )
-            except Exception:
-                logger.debug("Payload index for '%s' may already exist, skipping", field_name)
+            # Qdrant reports an existing index as an error; the client's exception
+            # types vary by transport (HTTP/gRPC), so catch broadly and log it.
+            except Exception as e:
+                logger.debug("Payload index for %r not created (may exist): %s", field_name, e)
 
     def upsert(self, points: Iterable[PointStruct]) -> None:
         self.client.upsert(collection_name=self.collection, points=list(points))

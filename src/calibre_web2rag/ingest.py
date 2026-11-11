@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 from collections import Counter
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Any, Protocol
 
 from bs4 import BeautifulSoup
 from qdrant_client.models import PointStruct
@@ -24,10 +27,14 @@ from calibre_web2rag.qdrant_store import QdrantStore
 logger = logging.getLogger(__name__)
 
 
+class BookSource(Protocol):
+    """Where books come from: CalibreRepository, or a fake in tests."""
+
+    def fetch_books(self) -> list[BookRecord]: ...
+
+
 def _safe_extract_sections(fmt: str, path: str) -> list[TextSection]:
     """Combined DRM-check and extraction in a single pass per format."""
-    from pathlib import Path
-
     p = Path(path)
     if fmt == "PDF":
         return try_extract_pdf_sections(p)
@@ -121,8 +128,7 @@ def _build_library_summary_text(books: list[BookRecord]) -> str:
             format_counts[f.format] += 1
 
     lines = [
-        f"This ebook library contains {len(books)} books "
-        f"by {len(author_counts)} authors.",
+        f"This ebook library contains {len(books)} books by {len(author_counts)} authors.",
     ]
 
     if format_counts:
@@ -166,7 +172,8 @@ def _build_library_summary_points(
     vectors = embedder.encode(chunks)
     points: list[PointStruct] = []
     for idx, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
-        payload = {
+        # Any: Qdrant payloads are arbitrary JSON.
+        payload: dict[str, Any] = {
             "book_id": None,
             "title": None,
             "authors": [],
@@ -210,7 +217,11 @@ def _build_library_summary_points(
 # ---------------------------------------------------------------------------
 
 
-def ingest(settings: Settings) -> int:
+def ingest(settings: Settings, *, stop: threading.Event | None = None) -> int:
+    """Ingest the whole library; returns the number of points upserted.
+
+    If ``stop`` is set (e.g. on SIGTERM), returns after the batch in flight.
+    """
     repo = CalibreRepository(settings.calibre_metadata_db, settings.calibre_library_root)
     embedder = build_embedder(settings)
     store = QdrantStore(
@@ -226,12 +237,15 @@ def ingest(settings: Settings) -> int:
         store.upsert(batch)
         inserted += len(batch)
         logger.info("Upserted %s chunks to Qdrant (total=%s)", len(batch), inserted)
+        if stop is not None and stop.is_set():
+            logger.info("Stopping early as requested")
+            break
     return inserted
 
 
 def _generate_points(
     *,
-    repo: CalibreRepository,
+    repo: BookSource,
     embedder: Embedder,
     settings: Settings,
 ) -> Iterator[list[PointStruct]]:
@@ -312,9 +326,7 @@ def _process_book(
         if desc_chunks:
             contextualized = [_contextualize(book, c) for c in desc_chunks]
             vectors = embedder.encode(contextualized)
-            for idx, (ctx_chunk, vec) in enumerate(
-                zip(contextualized, vectors, strict=True)
-            ):
+            for idx, (ctx_chunk, vec) in enumerate(zip(contextualized, vectors, strict=True)):
                 points.append(
                     _build_point(
                         book=book,
@@ -347,9 +359,7 @@ def _process_book(
         )
         sections = _safe_extract_sections(file.format, file_path)
         if not sections:
-            logger.info(
-                "Skipping unreadable or empty file: %s", file_path
-            )
+            logger.info("Skipping unreadable or empty file: %s", file_path)
             continue
 
         all_items: list[tuple[str | None, str]] = []
@@ -373,10 +383,7 @@ def _process_book(
             file.format,
         )
 
-        contextualized = [
-            _contextualize(book, chunk, chapter=title)
-            for title, chunk in all_items
-        ]
+        contextualized = [_contextualize(book, chunk, chapter=title) for title, chunk in all_items]
         vectors = embedder.encode(contextualized)
 
         for idx, ((chapter_title, _raw), ctx_chunk, vec) in enumerate(

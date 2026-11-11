@@ -1,9 +1,22 @@
+"""Settings, read once at startup from environment variables.
+
+Every variable is documented in docs/configuration.md and listed, with a
+safe example value, in .env.example.
+"""
+
 from __future__ import annotations
 
+import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
+EMBEDDING_PROVIDERS = frozenset({"ollama", "sentence_transformers", "sentence-transformers", "st"})
+DISTANCES = frozenset({"cosine", "dot", "euclid"})
+
+
+class ConfigError(ValueError):
+    """An environment variable is missing or set to something unusable."""
 
 
 @dataclass(frozen=True)
@@ -27,41 +40,72 @@ class Settings:
     distance: str
     vector_size: int
     embedding_context_length: int
+    log_level: str = "INFO"
 
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] = os.environ) -> Settings:
+        def required(name: str) -> str:
+            value = env.get(name)
+            if not value:
+                raise ConfigError(f"Missing required environment variable: {name}")
+            return value
 
-def _get_required(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise ValueError(f"Missing required environment variable: {name}")
-    return value
+        def optional(name: str) -> str | None:
+            # An empty value (NAME= in .env) means unset.
+            return env.get(name) or None
 
+        def integer(name: str, default: int, minimum: int) -> int:
+            text = env.get(name) or str(default)
+            try:
+                value = int(text)
+            except ValueError:
+                raise ConfigError(f"{name} must be a whole number, not {text!r}") from None
+            if value < minimum:
+                raise ConfigError(f"{name} must be at least {minimum}, not {value}")
+            return value
 
-def load_settings() -> Settings:
-    load_dotenv()
-    return Settings(
-        calibre_metadata_db=_get_required("CALIBRE_METADATA_DB"),
-        calibre_library_root=_get_required("CALIBRE_LIBRARY_ROOT"),
-        calibre_web_base_url=os.getenv("CALIBRE_WEB_BASE_URL"),
-        calibre_download_url_template=os.getenv("CALIBRE_WEB_DOWNLOAD_URL_TEMPLATE"),
-        qdrant_url=os.getenv("QDRANT_URL", "http://qdrant:6333"),
-        qdrant_api_key=os.getenv("QDRANT_API_KEY"),
-        qdrant_collection=os.getenv("QDRANT_COLLECTION", "calibre_books"),
-        embedding_provider=os.getenv("EMBEDDING_PROVIDER", "ollama").lower(),
-        embedding_model=os.getenv("EMBEDDING_MODEL", "nomic-embed-text"),
-        hf_cache_dir=(
-            os.getenv("HF_CACHE_DIR")
-            or os.getenv("SENTENCE_TRANSFORMERS_HOME")
-            or os.getenv("HF_HOME")
-        ),
-        ollama_url=os.getenv("OLLAMA_URL", "http://ollama:11434"),
-        ollama_api_key=os.getenv("OLLAMA_API_KEY"),
-        ollama_timeout_seconds=int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
-        chunk_size=int(os.getenv("CHUNK_SIZE", "1200")),
-        chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "120")),
-        batch_size=int(os.getenv("BATCH_SIZE", "64")),
-        distance=os.getenv("QDRANT_DISTANCE", "cosine").lower(),
-        vector_size=int(os.getenv("VECTOR_SIZE", "768")),
-        embedding_context_length=int(
-            os.getenv("EMBEDDING_CONTEXT_LENGTH", "8192")
-        ),
-    )
+        def choice(name: str, default: str, allowed: frozenset[str]) -> str:
+            value = (env.get(name) or default).lower()
+            if value not in allowed:
+                options = ", ".join(sorted(allowed))
+                raise ConfigError(f"{name} must be one of {options}, not {value!r}")
+            return value
+
+        chunk_size = integer("CHUNK_SIZE", 1200, 1)
+        chunk_overlap = integer("CHUNK_OVERLAP", 120, 0)
+        if chunk_overlap >= chunk_size:
+            raise ConfigError(
+                f"CHUNK_OVERLAP ({chunk_overlap}) must be smaller than CHUNK_SIZE ({chunk_size})"
+            )
+
+        log_level = (env.get("LOG_LEVEL") or "INFO").upper()
+        if log_level not in logging.getLevelNamesMapping():
+            raise ConfigError(f"LOG_LEVEL {log_level!r} is not a logging level")
+
+        return cls(
+            calibre_metadata_db=required("CALIBRE_METADATA_DB"),
+            calibre_library_root=required("CALIBRE_LIBRARY_ROOT"),
+            calibre_web_base_url=optional("CALIBRE_WEB_BASE_URL"),
+            calibre_download_url_template=optional("CALIBRE_WEB_DOWNLOAD_URL_TEMPLATE"),
+            qdrant_url=env.get("QDRANT_URL") or "http://qdrant:6333",
+            qdrant_api_key=optional("QDRANT_API_KEY"),
+            qdrant_collection=env.get("QDRANT_COLLECTION") or "calibre_books",
+            embedding_provider=choice("EMBEDDING_PROVIDER", "ollama", EMBEDDING_PROVIDERS),
+            embedding_model=env.get("EMBEDDING_MODEL") or "nomic-embed-text",
+            hf_cache_dir=(
+                optional("HF_CACHE_DIR")
+                or optional("SENTENCE_TRANSFORMERS_HOME")
+                or optional("HF_HOME")
+            ),
+            ollama_url=env.get("OLLAMA_URL") or "http://ollama:11434",
+            ollama_api_key=optional("OLLAMA_API_KEY"),
+            ollama_timeout_seconds=integer("OLLAMA_TIMEOUT_SECONDS", 120, 1),
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            batch_size=integer("BATCH_SIZE", 64, 1),
+            distance=choice("QDRANT_DISTANCE", "cosine", DISTANCES),
+            vector_size=integer("VECTOR_SIZE", 768, 1),
+            # 0 disables truncation.
+            embedding_context_length=integer("EMBEDDING_CONTEXT_LENGTH", 8192, 0),
+            log_level=log_level,
+        )

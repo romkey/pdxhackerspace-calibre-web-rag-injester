@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 
@@ -14,8 +14,7 @@ _CHARS_PER_TOKEN = 4
 
 
 class Embedder(Protocol):
-    def encode(self, chunks: list[str]) -> list[list[float]]:
-        ...
+    def encode(self, chunks: list[str]) -> list[list[float]]: ...
 
 
 def _truncate(texts: list[str], max_tokens: int) -> list[str]:
@@ -27,8 +26,7 @@ def _truncate(texts: list[str], max_tokens: int) -> list[str]:
     for text in texts:
         if len(text) > max_chars:
             logger.warning(
-                "Truncating text from %d to %d chars "
-                "(~%d token limit)",
+                "Truncating text from %d to %d chars (~%d token limit)",
                 len(text),
                 max_chars,
                 max_tokens,
@@ -39,7 +37,8 @@ def _truncate(texts: list[str], max_tokens: int) -> list[str]:
     return result
 
 
-def _load_sentence_transformer():
+# Any: sentence-transformers is an optional extra, so it can't be typed here.
+def _load_sentence_transformer() -> Any:
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError:
@@ -75,11 +74,7 @@ class OllamaEmbedder:
     max_tokens: int = 0
 
     def __post_init__(self) -> None:
-        headers = (
-            {"Authorization": f"Bearer {self.api_key}"}
-            if self.api_key
-            else None
-        )
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
         self._client = httpx.Client(
             base_url=self.ollama_url.rstrip("/"),
             headers=headers,
@@ -96,9 +91,7 @@ class OllamaEmbedder:
         data = response.json()
         embeddings = data.get("embeddings")
         if not isinstance(embeddings, list):
-            raise ValueError(
-                "Ollama /api/embed response missing 'embeddings'"
-            )
+            raise ValueError("Ollama /api/embed response missing 'embeddings'")
         return embeddings
 
 
