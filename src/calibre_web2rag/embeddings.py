@@ -127,6 +127,16 @@ class OpenAIEmbedder:
         return [item["embedding"] for item in ordered]
 
 
+def _estimate_tokens(text: str) -> int:
+    """Conservative token estimate for request budgeting.
+
+    ASCII text averages ~4 chars/token, but CJK and other non-Latin scripts
+    are often ~1 token per character, so count non-ASCII chars individually.
+    """
+    non_ascii = sum(1 for ch in text if ord(ch) > 127)
+    return (len(text) - non_ascii) // _CHARS_PER_TOKEN + non_ascii + 1
+
+
 def _request_batches(
     texts: list[str],
     max_inputs: int | None = None,
@@ -139,7 +149,7 @@ def _request_batches(
     current: list[str] = []
     current_tokens = 0
     for text in texts:
-        tokens = len(text) // _CHARS_PER_TOKEN + 1
+        tokens = _estimate_tokens(text)
         if current and (
             len(current) >= max_inputs or current_tokens + tokens > max_tokens
         ):

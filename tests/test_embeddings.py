@@ -4,6 +4,7 @@ from calibre_web2rag.config import Settings
 from calibre_web2rag.embeddings import (
     OpenAIEmbedder,
     SentenceTransformerEmbedder,
+    _estimate_tokens,
     _request_batches,
     _truncate,
     build_embedder,
@@ -244,3 +245,14 @@ def test_openai_embedder_splits_large_inputs(monkeypatch) -> None:
     vectors = embedder.encode(["t"] * 7)
     assert len(vectors) == 7
     assert calls == [3, 3, 1]
+
+
+def test_estimate_tokens_counts_cjk_per_character() -> None:
+    assert _estimate_tokens("x" * 400) == 101
+    assert _estimate_tokens("漢" * 400) == 401
+
+
+def test_request_batches_splits_cjk_text() -> None:
+    cjk = "漢" * 100  # ~101 estimated tokens each, not ~26
+    batches = _request_batches([cjk] * 4, max_inputs=100, max_tokens=250)
+    assert [len(b) for b in batches] == [2, 2]
