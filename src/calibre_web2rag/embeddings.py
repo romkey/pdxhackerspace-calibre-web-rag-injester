@@ -67,12 +67,20 @@ class SentenceTransformerEmbedder:
 
 
 @dataclass
-class OllamaEmbedder:
+class OpenAIEmbedder:
+    """Embedder for the OpenAI embeddings API (``POST {base_url}/embeddings``).
+
+    Works with api.openai.com and any OpenAI-compatible server (Ollama's
+    ``/v1`` endpoint, vLLM, LM Studio, LiteLLM, ...). The API key is optional
+    so that unauthenticated self-hosted servers can be used.
+    """
+
     model_name: str
-    ollama_url: str
+    base_url: str
     api_key: str | None
     timeout_seconds: int
     max_tokens: int = 0
+    dimensions: int | None = None
 
     def __post_init__(self) -> None:
         headers = (
@@ -81,25 +89,31 @@ class OllamaEmbedder:
             else None
         )
         self._client = httpx.Client(
-            base_url=self.ollama_url.rstrip("/"),
+            base_url=self.base_url.rstrip("/"),
             headers=headers,
             timeout=self.timeout_seconds,
         )
 
     def encode(self, chunks: list[str]) -> list[list[float]]:
+        if not chunks:
+            return []
         chunks = _truncate(chunks, self.max_tokens)
-        response = self._client.post(
-            "/api/embed",
-            json={"model": self.model_name, "input": chunks},
-        )
+        payload: dict = {
+            "model": self.model_name,
+            "input": chunks,
+            "encoding_format": "float",
+        }
+        if self.dimensions:
+            payload["dimensions"] = self.dimensions
+        response = self._client.post("/embeddings", json=payload)
         response.raise_for_status()
-        data = response.json()
-        embeddings = data.get("embeddings")
-        if not isinstance(embeddings, list):
+        data = response.json().get("data")
+        if not isinstance(data, list) or len(data) != len(chunks):
             raise ValueError(
-                "Ollama /api/embed response missing 'embeddings'"
+                "OpenAI /embeddings response missing 'data' or wrong length"
             )
-        return embeddings
+        ordered = sorted(data, key=lambda item: item.get("index", 0))
+        return [item["embedding"] for item in ordered]
 
 
 def build_embedder(settings: Settings) -> Embedder:
@@ -111,15 +125,16 @@ def build_embedder(settings: Settings) -> Embedder:
             cache_dir=settings.hf_cache_dir,
             max_tokens=ctx,
         )
-    if provider == "ollama":
-        return OllamaEmbedder(
+    if provider == "openai":
+        return OpenAIEmbedder(
             model_name=settings.embedding_model,
-            ollama_url=settings.ollama_url,
-            api_key=settings.ollama_api_key,
-            timeout_seconds=settings.ollama_timeout_seconds,
+            base_url=settings.openai_base_url,
+            api_key=settings.openai_api_key,
+            timeout_seconds=settings.openai_timeout_seconds,
             max_tokens=ctx,
+            dimensions=settings.embedding_dimensions,
         )
     raise ValueError(
         f"Unsupported EMBEDDING_PROVIDER '{settings.embedding_provider}'. "
-        "Supported: sentence_transformers, ollama"
+        "Supported: openai, sentence_transformers"
     )

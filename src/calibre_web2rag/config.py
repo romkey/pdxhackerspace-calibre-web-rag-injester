@@ -18,15 +18,16 @@ class Settings:
     embedding_provider: str
     embedding_model: str
     hf_cache_dir: str | None
-    ollama_url: str
-    ollama_api_key: str | None
-    ollama_timeout_seconds: int
+    openai_base_url: str
+    openai_api_key: str | None
+    openai_timeout_seconds: int
     chunk_size: int
     chunk_overlap: int
     batch_size: int
     distance: str
     vector_size: int
     embedding_context_length: int
+    embedding_dimensions: int | None = None
 
 
 def _get_required(name: str) -> str:
@@ -46,22 +47,23 @@ def load_settings() -> Settings:
         qdrant_url=os.getenv("QDRANT_URL", "http://qdrant:6333"),
         qdrant_api_key=os.getenv("QDRANT_API_KEY"),
         qdrant_collection=os.getenv("QDRANT_COLLECTION", "calibre_books"),
-        embedding_provider=os.getenv("EMBEDDING_PROVIDER", "ollama").lower(),
-        embedding_model=os.getenv("EMBEDDING_MODEL", "nomic-embed-text"),
+        embedding_provider=os.getenv("EMBEDDING_PROVIDER", "openai").lower(),
+        embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
         hf_cache_dir=(
             os.getenv("HF_CACHE_DIR")
             or os.getenv("SENTENCE_TRANSFORMERS_HOME")
             or os.getenv("HF_HOME")
         ),
-        ollama_url=os.getenv("OLLAMA_URL", "http://ollama:11434"),
-        ollama_api_key=os.getenv("OLLAMA_API_KEY"),
-        ollama_timeout_seconds=int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
+        openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        openai_api_key=os.getenv("OPENAI_API_KEY") or None,
+        openai_timeout_seconds=int(os.getenv("OPENAI_TIMEOUT_SECONDS", "120")),
         chunk_size=int(os.getenv("CHUNK_SIZE", "1200")),
         chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "120")),
         batch_size=int(os.getenv("BATCH_SIZE", "64")),
         distance=os.getenv("QDRANT_DISTANCE", "cosine").lower(),
-        vector_size=int(os.getenv("VECTOR_SIZE", "768")),
+        vector_size=int(os.getenv("VECTOR_SIZE", "1536")),
         embedding_context_length=int(
             os.getenv("EMBEDDING_CONTEXT_LENGTH", "8192")
         ),
+        embedding_dimensions=int(os.getenv("EMBEDDING_DIMENSIONS") or 0) or None,
     )
