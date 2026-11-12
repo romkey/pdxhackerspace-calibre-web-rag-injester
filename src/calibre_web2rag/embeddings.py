@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Literal, Protocol
 
 import httpx
 
@@ -18,28 +18,48 @@ _OPENAI_MAX_INPUTS_PER_REQUEST = 2048
 _OPENAI_MAX_TOKENS_PER_REQUEST = 250_000
 
 
+EmbedKind = Literal["query", "document"]
+
+
 class Embedder(Protocol):
-    def encode(self, chunks: list[str]) -> list[list[float]]: ...
+    def encode(self, chunks: list[str], kind: EmbedKind = "document") -> list[list[float]]: ...
 
 
-def _truncate(texts: list[str], max_tokens: int) -> list[str]:
-    """Truncate texts that would exceed the model's context length."""
+def _truncate(texts: list[str], max_tokens: int, prefix: str = "") -> list[str]:
+    """Prepend ``prefix`` and truncate so the result fits the context length.
+
+    The prefix counts toward ``max_tokens``; the text is shortened, never the
+    prefix.
+    """
     if max_tokens <= 0:
-        return texts
-    max_chars = max_tokens * _CHARS_PER_TOKEN
+        return [prefix + text for text in texts] if prefix else texts
+    max_chars = max(max_tokens * _CHARS_PER_TOKEN - len(prefix), 0)
     result: list[str] = []
     for text in texts:
         if len(text) > max_chars:
             logger.warning(
-                "Truncating text from %d to %d chars (~%d token limit)",
+                "Truncating text from %d to %d chars (~%d token limit incl. %d-char prefix)",
                 len(text),
                 max_chars,
                 max_tokens,
+                len(prefix),
             )
-            result.append(text[:max_chars])
-        else:
-            result.append(text)
+            text = text[:max_chars]
+        result.append(prefix + text)
     return result
+
+
+@dataclass
+class _Prefixes:
+    query_prefix: str = ""
+    document_prefix: str = ""
+
+    def for_kind(self, kind: EmbedKind) -> str:
+        if kind == "query":
+            return self.query_prefix
+        if kind == "document":
+            return self.document_prefix
+        raise ValueError(f"Unknown embedding kind {kind!r}; use 'query' or 'document'")
 
 
 # Any: sentence-transformers is an optional extra, so it can't be typed here.
@@ -59,13 +79,14 @@ class SentenceTransformerEmbedder:
     model_name: str
     cache_dir: str | None = None
     max_tokens: int = 0
+    prefixes: _Prefixes = field(default_factory=_Prefixes)
 
     def __post_init__(self) -> None:
         cls = _load_sentence_transformer()
         self._model = cls(self.model_name, cache_folder=self.cache_dir)
 
-    def encode(self, chunks: list[str]) -> list[list[float]]:
-        chunks = _truncate(chunks, self.max_tokens)
+    def encode(self, chunks: list[str], kind: EmbedKind = "document") -> list[list[float]]:
+        chunks = _truncate(chunks, self.max_tokens, self.prefixes.for_kind(kind))
         vectors = self._model.encode(chunks, show_progress_bar=False)
         return [v.tolist() if hasattr(v, "tolist") else list(v) for v in vectors]
 
@@ -85,6 +106,7 @@ class OpenAIEmbedder:
     timeout_seconds: int
     max_tokens: int = 0
     dimensions: int | None = None
+    prefixes: _Prefixes = field(default_factory=_Prefixes)
 
     def __post_init__(self) -> None:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
@@ -94,10 +116,11 @@ class OpenAIEmbedder:
             timeout=self.timeout_seconds,
         )
 
-    def encode(self, chunks: list[str]) -> list[list[float]]:
+    def encode(self, chunks: list[str], kind: EmbedKind = "document") -> list[list[float]]:
+        prefix = self.prefixes.for_kind(kind)
         if not chunks:
             return []
-        chunks = _truncate(chunks, self.max_tokens)
+        chunks = _truncate(chunks, self.max_tokens, prefix)
         vectors: list[list[float]] = []
         for batch in _request_batches(chunks):
             vectors.extend(self._embed_batch(batch))
@@ -157,11 +180,16 @@ def _request_batches(
 def build_embedder(settings: Settings) -> Embedder:
     provider = settings.embedding_provider
     ctx = settings.embedding_context_length
+    prefixes = _Prefixes(
+        query_prefix=settings.embedding_query_prefix,
+        document_prefix=settings.embedding_document_prefix,
+    )
     if provider in {"sentence_transformers", "sentence-transformers", "st"}:
         return SentenceTransformerEmbedder(
             model_name=settings.embedding_model,
             cache_dir=settings.hf_cache_dir,
             max_tokens=ctx,
+            prefixes=prefixes,
         )
     if provider == "openai":
         return OpenAIEmbedder(
@@ -171,6 +199,7 @@ def build_embedder(settings: Settings) -> Embedder:
             timeout_seconds=settings.openai_timeout_seconds,
             max_tokens=ctx,
             dimensions=settings.embedding_dimensions,
+            prefixes=prefixes,
         )
     raise ValueError(
         f"Unsupported EMBEDDING_PROVIDER '{settings.embedding_provider}'. "

@@ -17,17 +17,19 @@ def test_defaults() -> None:
     assert settings.qdrant_api_key is None
     assert settings.qdrant_collection == "calibre_books"
     assert settings.embedding_provider == "openai"
-    assert settings.embedding_model == "text-embedding-3-small"
+    assert settings.embedding_model == "nomic-ai/modernbert-embed-base"
     assert settings.hf_cache_dir is None
-    assert settings.openai_base_url == "https://api.openai.com/v1"
+    assert settings.openai_base_url == "http://localhost:8080/v1"
     assert settings.openai_api_key is None
     assert settings.openai_timeout_seconds == 120
     assert settings.chunk_size == 1200
     assert settings.chunk_overlap == 120
     assert settings.batch_size == 64
     assert settings.distance == "cosine"
-    assert settings.vector_size == 1536
+    assert settings.vector_size == 768
     assert settings.embedding_dimensions is None
+    assert settings.embedding_query_prefix == ""
+    assert settings.embedding_document_prefix == ""
     assert settings.embedding_context_length == 8192
     assert settings.log_level == "INFO"
 
@@ -46,6 +48,8 @@ def test_overrides() -> None:
             "EMBEDDING_CONTEXT_LENGTH": "0",
             "OPENAI_API_KEY": "dummy-key",
             "EMBEDDING_DIMENSIONS": "384",
+            "EMBEDDING_QUERY_PREFIX": "query: ",
+            "EMBEDDING_DOCUMENT_PREFIX": "passage: ",
             "LOG_LEVEL": "debug",
         }
     )
@@ -59,6 +63,8 @@ def test_overrides() -> None:
     assert settings.embedding_context_length == 0
     assert settings.openai_api_key == "dummy-key"
     assert settings.embedding_dimensions == 384
+    assert settings.embedding_query_prefix == "query: "
+    assert settings.embedding_document_prefix == "passage: "
     assert settings.log_level == "DEBUG"
 
 

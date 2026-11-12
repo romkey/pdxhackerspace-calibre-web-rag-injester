@@ -169,7 +169,7 @@ def _build_library_summary_points(
     if not chunks:
         return []
 
-    vectors = embedder.encode(chunks)
+    vectors = embedder.encode(chunks, kind="document")
     points: list[PointStruct] = []
     for idx, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
         # Any: Qdrant payloads are arbitrary JSON.
@@ -306,7 +306,7 @@ def _process_book(
 
     # Per-book metadata point for catalog queries
     metadata_text = _contextualize(book, _build_book_metadata_text(book))
-    vector = embedder.encode([metadata_text])[0]
+    vector = embedder.encode([metadata_text], kind="document")[0]
     points.append(
         _build_point(
             book=book,
@@ -333,7 +333,7 @@ def _process_book(
         )
         if desc_chunks:
             contextualized = [_contextualize(book, c) for c in desc_chunks]
-            vectors = embedder.encode(contextualized)
+            vectors = embedder.encode(contextualized, kind="document")
             for idx, (ctx_chunk, vec) in enumerate(zip(contextualized, vectors, strict=True)):
                 points.append(
                     _build_point(
@@ -395,7 +395,7 @@ def _process_book(
         )
 
         contextualized = [_contextualize(book, chunk, chapter=title) for title, chunk in all_items]
-        vectors = embedder.encode(contextualized)
+        vectors = embedder.encode(contextualized, kind="document")
 
         for idx, ((chapter_title, _raw), ctx_chunk, vec) in enumerate(
             zip(all_items, contextualized, vectors, strict=True)

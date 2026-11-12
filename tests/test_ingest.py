@@ -12,6 +12,7 @@ from qdrant_client.models import PointStruct
 
 from calibre_web2rag import ingest as ingest_mod
 from calibre_web2rag.config import Settings
+from calibre_web2rag.embeddings import EmbedKind
 from calibre_web2rag.ingest import (
     _build_book_metadata_text,
     _build_library_summary_text,
@@ -26,7 +27,11 @@ BookFactory = Callable[..., BookRecord]
 
 
 class _Embedder:
-    def encode(self, chunks: list[str]) -> list[list[float]]:
+    def __init__(self) -> None:
+        self.kinds: list[EmbedKind] = []
+
+    def encode(self, chunks: list[str], kind: EmbedKind = "document") -> list[list[float]]:
+        self.kinds.append(kind)
         return [[0.1, 0.2, 0.3] for _ in chunks]
 
 
@@ -352,9 +357,13 @@ def test_description_chunks_indexed(
 
     settings = make_settings(chunk_size=200, chunk_overlap=20)
 
+    embedder = _Embedder()
     points = _collect_points(
-        _generate_points(repo=_Repo([book]), embedder=_Embedder(), settings=settings)
+        _generate_points(repo=_Repo([book]), embedder=embedder, settings=settings)
     )
+    # Ingestion embeds everything (metadata, description, summary) as documents.
+    assert embedder.kinds
+    assert set(embedder.kinds) == {"document"}
     desc = _by_type(points, "description")
     assert len(desc) == 1
     payload = desc[0]

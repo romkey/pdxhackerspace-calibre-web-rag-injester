@@ -97,10 +97,15 @@ release. To ingest again:
 docker compose -f docker-compose.prod.yaml run --rm app
 ```
 
-By default it embeds with OpenAI's `text-embedding-3-small`; set
-`OPENAI_API_KEY`. For another OpenAI-compatible server, set
-`OPENAI_BASE_URL` (and `EMBEDDING_MODEL`). Make sure `VECTOR_SIZE` matches
-the model's dimension (`text-embedding-3-small`: 1536).
+By default it embeds with ModernBERT (`nomic-ai/modernbert-embed-base`,
+768 dimensions) from a local OpenAI-compatible server at
+`http://localhost:8080/v1`, such as Hugging Face text-embeddings-inference,
+vLLM or Infinity. Inside the container `localhost` is the container itself,
+so set `OPENAI_BASE_URL` to the server's reachable address (for example
+`http://host.docker.internal:8080/v1`). For OpenAI, set
+`OPENAI_BASE_URL=https://api.openai.com/v1`, `OPENAI_API_KEY`, an
+`EMBEDDING_MODEL` such as `text-embedding-3-small`, and empty prefixes.
+Make sure `VECTOR_SIZE` matches the model's dimension.
 
 To embed locally with Ollama on an NVIDIA GPU instead (Linux with the
 NVIDIA container toolkit), add the override file. It runs Ollama, pulls
@@ -110,6 +115,65 @@ Ollama's OpenAI-compatible API; no API key is needed:
 
 ```bash
 docker compose -f docker-compose.prod.yaml -f docker-compose.ollama.yaml up -d
+```
+
+`nomic-embed-text` uses the same prefixes as ModernBERT (below); change
+them if you pick another Ollama model.
+
+### Embedding prefixes
+
+Many embedding models expect a task prefix on each input: one for search
+queries, another for the documents being searched. Set them with
+`EMBEDDING_QUERY_PREFIX` and `EMBEDDING_DOCUMENT_PREFIX`; both are empty
+unless set, and `.env.example` sets the ModernBERT ones (`search_query: ` /
+`search_document: `). [docs/configuration.md](docs/configuration.md) lists
+the prefixes for other models.
+
+- The ingester embeds every point it stores with the **document** prefix.
+- Changing `EMBEDDING_DOCUMENT_PREFIX` changes every stored vector: re-run
+  the ingester to re-embed the library (points are overwritten in place).
+- Anything that searches the collection must embed its queries with the
+  **query** prefix.
+
+### Querying the collection
+
+Apps that query Qdrant directly must embed the query with the same model,
+through the same server, with the query prefix:
+
+```python
+import httpx
+from qdrant_client import QdrantClient
+
+QUERY_PREFIX = "search_query: "  # must match EMBEDDING_QUERY_PREFIX
+
+resp = httpx.post(
+    "http://localhost:8080/v1/embeddings",
+    json={
+        "model": "nomic-ai/modernbert-embed-base",
+        "input": [QUERY_PREFIX + "books about orbital mechanics"],
+    },
+)
+vector = resp.json()["data"][0]["embedding"]
+
+hits = (
+    QdrantClient(url="http://localhost:6333")
+    .query_points(collection_name="calibre_books", query=vector, limit=5)
+    .points
+)
+for hit in hits:
+    print(hit.score, hit.payload["title"], hit.payload["chunk_type"])
+```
+
+From Python with this package installed, the configured embedder adds the
+prefix for you:
+
+```python
+from calibre_web2rag.config import Settings
+from calibre_web2rag.embeddings import build_embedder
+
+vector = build_embedder(Settings.from_env()).encode(
+    ["books about orbital mechanics"], kind="query"
+)[0]
 ```
 
 ### With pip

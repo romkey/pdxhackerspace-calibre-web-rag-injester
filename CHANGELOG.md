@@ -14,8 +14,8 @@ All notable changes to this project are documented here. The format follows
   `OLLAMA_TIMEOUT_SECONDS` variables are gone. Use `OPENAI_BASE_URL`,
   `OPENAI_API_KEY` and `OPENAI_TIMEOUT_SECONDS`; for Ollama, set
   `OPENAI_BASE_URL=http://ollama:11434/v1` (the Ollama override file does
-  this). The defaults are now `text-embedding-3-small` and
-  `VECTOR_SIZE=1536`. Optional `EMBEDDING_DIMENSIONS` asks for shorter
+  this). The defaults are now ModernBERT (`nomic-ai/modernbert-embed-base`)
+  from a local server at `http://localhost:8080/v1`, and `VECTOR_SIZE=768`. Optional `EMBEDDING_DIMENSIONS` asks for shorter
   vectors. Requests are split to stay under the API's input and token
   limits.
 - **Breaking:** requires Python 3.15 (was 3.11). The Docker image is based
@@ -40,6 +40,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `EMBEDDING_QUERY_PREFIX` and `EMBEDDING_DOCUMENT_PREFIX`, for models
+  trained with task prefixes. The ingester embeds with the document
+  prefix; `encode(texts, kind="query")` uses the query prefix.
 - `--version`, and clean shutdown on SIGTERM (`docker stop`): the ingester
   finishes the file being read, upserts what it has and exits.
 - `LOG_LEVEL` setting.

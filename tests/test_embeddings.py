@@ -16,6 +16,7 @@ from calibre_web2rag.embeddings import (
     SentenceTransformerEmbedder,
     _estimate_tokens,
     _load_sentence_transformer,
+    _Prefixes,
     _request_batches,
     _truncate,
     build_embedder,
@@ -252,3 +253,52 @@ def test_truncate_shortens_long_texts() -> None:
 def test_truncate_noop_when_disabled() -> None:
     long_text = "x" * 100
     assert _truncate([long_text], max_tokens=0) == [long_text]
+
+
+def test_truncate_prepends_prefix_and_counts_it() -> None:
+    result = _truncate(["x" * 100], max_tokens=10, prefix="doc: ")
+    assert result[0].startswith("doc: ")
+    assert len(result[0]) == 10 * 4  # prefix + text fits the budget
+
+
+def test_truncate_prefix_without_limit() -> None:
+    assert _truncate(["abc"], max_tokens=0, prefix="q: ") == ["q: abc"]
+
+
+def test_openai_embedder_applies_query_and_document_prefixes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    embedder = _openai()
+    embedder.prefixes = _Prefixes(
+        query_prefix="search_query: ", document_prefix="search_document: "
+    )
+    embedder.encode(["a", "b"])
+    assert _FakeClient.last_json["input"] == ["search_document: a", "search_document: b"]
+    embedder.encode(["a", "b"], kind="query")
+    assert _FakeClient.last_json["input"] == ["search_query: a", "search_query: b"]
+
+
+def test_openai_embedder_no_prefix_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    _openai().encode(["a", "b"], kind="query")
+    assert _FakeClient.last_json["input"] == ["a", "b"]
+
+
+def test_embedder_rejects_unknown_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    with pytest.raises(ValueError, match="Unknown embedding kind"):
+        _openai().encode(["a"], kind="passage")  # type: ignore[arg-type]
+
+
+def test_build_embedder_passes_prefixes_from_settings(
+    monkeypatch: pytest.MonkeyPatch, make_settings: SettingsFactory
+) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    settings = make_settings(
+        embedding_query_prefix="search_query: ", embedding_document_prefix="search_document: "
+    )
+    embedder = build_embedder(settings)
+    assert isinstance(embedder, OpenAIEmbedder)
+    assert embedder.prefixes.for_kind("query") == "search_query: "
+    assert embedder.prefixes.for_kind("document") == "search_document: "
