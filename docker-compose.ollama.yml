@@ -19,7 +19,7 @@ services:
       - ollama
     environment:
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
     command: >
       sh -c "sleep 3 &&
              curl -fsS -X POST $$OLLAMA_URL/api/pull
@@ -28,8 +28,10 @@ services:
 
   ingester:
     environment:
-      - EMBEDDING_PROVIDER=ollama
-      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - EMBEDDING_PROVIDER=openai
+      - OPENAI_BASE_URL=${OLLAMA_URL:-http://ollama:11434}/v1
+      - EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      - VECTOR_SIZE=${OLLAMA_VECTOR_SIZE:-768}
     depends_on:
       - qdrant
       - ollama

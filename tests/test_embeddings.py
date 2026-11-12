@@ -1,7 +1,11 @@
+import pytest
+
 from calibre_web2rag.config import Settings
 from calibre_web2rag.embeddings import (
-    OllamaEmbedder,
+    OpenAIEmbedder,
     SentenceTransformerEmbedder,
+    _estimate_tokens,
+    _request_batches,
     _truncate,
     build_embedder,
 )
@@ -12,23 +16,34 @@ class _FakeResponse:
         return None
 
     def json(self) -> dict:
-        return {"embeddings": [[0.1, 0.2], [0.3, 0.4]]}
+        # Deliberately out of order to check sorting by index.
+        return {
+            "object": "list",
+            "data": [
+                {"object": "embedding", "index": 1, "embedding": [0.3, 0.4]},
+                {"object": "embedding", "index": 0, "embedding": [0.1, 0.2]},
+            ],
+        }
 
 
 class _FakeClient:
     headers: dict | None = None
+    base_url: str | None = None
+    last_json: dict | None = None
 
     def __init__(
         self,
-        base_url: str,  # noqa: ARG002
+        base_url: str,
         headers: dict | None,
         timeout: int,  # noqa: ARG002
     ) -> None:
         self.__class__.headers = headers
+        self.__class__.base_url = base_url
 
     def post(self, path: str, json: dict) -> _FakeResponse:  # noqa: A002
-        assert path == "/api/embed"
-        assert json["model"] == "nomic-embed-text"
+        assert path == "/embeddings"
+        assert json["model"] == "text-embedding-3-small"
+        self.__class__.last_json = json
         return _FakeResponse()
 
 
@@ -41,20 +56,67 @@ class _FakeSentenceTransformer:
         return [[0.5, 0.6] for _ in chunks]
 
 
-def test_ollama_embedder_calls_embed_api(monkeypatch) -> None:
+def test_openai_embedder_calls_embeddings_api(monkeypatch) -> None:
     monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
-    embedder = OllamaEmbedder(
-        model_name="nomic-embed-text",
-        ollama_url="http://ollama:11434",
+    embedder = OpenAIEmbedder(
+        model_name="text-embedding-3-small",
+        base_url="https://api.openai.com/v1/",
         api_key=None,
         timeout_seconds=30,
     )
     vectors = embedder.encode(["a", "b"])
-    assert len(vectors) == 2
-    assert vectors[0] == [0.1, 0.2]
+    assert _FakeClient.base_url == "https://api.openai.com/v1"
+    assert _FakeClient.headers is None
+    assert _FakeClient.last_json["input"] == ["a", "b"]
+    assert "dimensions" not in _FakeClient.last_json
+    assert vectors == [[0.1, 0.2], [0.3, 0.4]]
 
 
-def test_build_embedder_uses_ollama_provider(monkeypatch) -> None:
+def test_openai_embedder_sends_dimensions(monkeypatch) -> None:
+    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
+    embedder = OpenAIEmbedder(
+        model_name="text-embedding-3-small",
+        base_url="https://api.openai.com/v1",
+        api_key=None,
+        timeout_seconds=30,
+        dimensions=256,
+    )
+    embedder.encode(["a", "b"])
+    assert _FakeClient.last_json["dimensions"] == 256
+
+
+def test_openai_embedder_rejects_bad_response(monkeypatch) -> None:
+    class _BadResponse(_FakeResponse):
+        def json(self) -> dict:
+            return {"error": "nope"}
+
+    class _BadClient(_FakeClient):
+        def post(self, path: str, json: dict) -> _FakeResponse:  # noqa: A002, ARG002
+            return _BadResponse()
+
+    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _BadClient)
+    embedder = OpenAIEmbedder(
+        model_name="text-embedding-3-small",
+        base_url="https://api.openai.com/v1",
+        api_key=None,
+        timeout_seconds=30,
+    )
+    with pytest.raises(ValueError):
+        embedder.encode(["a", "b"])
+
+
+def test_openai_embedder_empty_input_skips_request(monkeypatch) -> None:
+    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
+    embedder = OpenAIEmbedder(
+        model_name="text-embedding-3-small",
+        base_url="https://api.openai.com/v1",
+        api_key=None,
+        timeout_seconds=30,
+    )
+    assert embedder.encode([]) == []
+
+
+def test_build_embedder_uses_openai_provider(monkeypatch) -> None:
     monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
     settings = Settings(
         calibre_metadata_db="db.sqlite",
@@ -64,12 +126,12 @@ def test_build_embedder_uses_ollama_provider(monkeypatch) -> None:
         qdrant_url="http://qdrant:6333",
         qdrant_api_key=None,
         qdrant_collection="books",
-        embedding_provider="ollama",
-        embedding_model="nomic-embed-text",
+        embedding_provider="openai",
+        embedding_model="text-embedding-3-small",
         hf_cache_dir=None,
-        ollama_url="http://ollama:11434",
-        ollama_api_key=None,
-        ollama_timeout_seconds=30,
+        openai_base_url="http://localhost:11434/v1",
+        openai_api_key=None,
+        openai_timeout_seconds=30,
         chunk_size=1000,
         chunk_overlap=100,
         batch_size=10,
@@ -78,7 +140,7 @@ def test_build_embedder_uses_ollama_provider(monkeypatch) -> None:
         embedding_context_length=8192,
     )
     embedder = build_embedder(settings)
-    assert isinstance(embedder, OllamaEmbedder)
+    assert isinstance(embedder, OpenAIEmbedder)
     assert embedder.max_tokens == 8192
 
 
@@ -98,9 +160,9 @@ def test_build_embedder_uses_st_cache_directory(monkeypatch) -> None:
         embedding_provider="sentence_transformers",
         embedding_model="sentence-transformers/all-MiniLM-L6-v2",
         hf_cache_dir="/tmp/hf-cache",
-        ollama_url="http://ollama:11434",
-        ollama_api_key=None,
-        ollama_timeout_seconds=30,
+        openai_base_url="http://localhost:11434/v1",
+        openai_api_key=None,
+        openai_timeout_seconds=30,
         chunk_size=1000,
         chunk_overlap=100,
         batch_size=10,
@@ -113,11 +175,11 @@ def test_build_embedder_uses_st_cache_directory(monkeypatch) -> None:
     assert embedder._model.cache_folder == "/tmp/hf-cache"
 
 
-def test_ollama_embedder_uses_api_key_header(monkeypatch) -> None:
+def test_openai_embedder_uses_api_key_header(monkeypatch) -> None:
     monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
-    OllamaEmbedder(
-        model_name="nomic-embed-text",
-        ollama_url="http://ollama:11434",
+    OpenAIEmbedder(
+        model_name="text-embedding-3-small",
+        base_url="https://api.openai.com/v1",
         api_key="secret",
         timeout_seconds=30,
     )
@@ -136,3 +198,61 @@ def test_truncate_noop_when_disabled() -> None:
     long_text = "x" * 100
     result = _truncate([long_text], max_tokens=0)
     assert result[0] == long_text
+
+
+def test_request_batches_respects_input_cap() -> None:
+    batches = _request_batches(["a"] * 5, max_inputs=2, max_tokens=10_000)
+    assert [len(b) for b in batches] == [2, 2, 1]
+
+
+def test_request_batches_respects_token_cap() -> None:
+    text = "x" * 40  # ~11 estimated tokens each
+    batches = _request_batches([text] * 4, max_inputs=100, max_tokens=25)
+    assert [len(b) for b in batches] == [2, 2]
+
+
+def test_openai_embedder_splits_large_inputs(monkeypatch) -> None:
+    calls: list[int] = []
+
+    class _EchoClient(_FakeClient):
+        def post(self, path: str, json: dict):  # noqa: A002, ARG002
+            n = len(json["input"])
+            calls.append(n)
+
+            class _R:
+                def raise_for_status(self) -> None:
+                    return None
+
+                def json(self) -> dict:
+                    return {
+                        "data": [
+                            {"index": i, "embedding": [float(i)]} for i in range(n)
+                        ]
+                    }
+
+            return _R()
+
+    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _EchoClient)
+    monkeypatch.setattr(
+        "calibre_web2rag.embeddings._OPENAI_MAX_INPUTS_PER_REQUEST", 3
+    )
+    embedder = OpenAIEmbedder(
+        model_name="text-embedding-3-small",
+        base_url="https://api.openai.com/v1",
+        api_key=None,
+        timeout_seconds=30,
+    )
+    vectors = embedder.encode(["t"] * 7)
+    assert len(vectors) == 7
+    assert calls == [3, 3, 1]
+
+
+def test_estimate_tokens_counts_cjk_per_character() -> None:
+    assert _estimate_tokens("x" * 400) == 101
+    assert _estimate_tokens("漢" * 400) == 401
+
+
+def test_request_batches_splits_cjk_text() -> None:
+    cjk = "漢" * 100  # ~101 estimated tokens each, not ~26
+    batches = _request_batches([cjk] * 4, max_inputs=100, max_tokens=250)
+    assert [len(b) for b in batches] == [2, 2]
