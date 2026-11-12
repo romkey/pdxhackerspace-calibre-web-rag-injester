@@ -1,204 +1,171 @@
+from __future__ import annotations
+
+import builtins
+import sys
+import types
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, ClassVar
+
+import httpx
 import pytest
 
+from calibre_web2rag import embeddings
 from calibre_web2rag.config import Settings
 from calibre_web2rag.embeddings import (
     OpenAIEmbedder,
     SentenceTransformerEmbedder,
     _estimate_tokens,
+    _load_sentence_transformer,
     _Prefixes,
     _request_batches,
     _truncate,
     build_embedder,
 )
 
+SettingsFactory = Callable[..., Settings]  # the make_settings fixture
+
 
 class _FakeResponse:
+    # Any: a JSON body.
+    def __init__(self, body: dict[str, Any]) -> None:
+        self._body = body
+
     def raise_for_status(self) -> None:
         return None
 
-    def json(self) -> dict:
-        # Deliberately out of order to check sorting by index.
-        return {
-            "object": "list",
-            "data": [
-                {"object": "embedding", "index": 1, "embedding": [0.3, 0.4]},
-                {"object": "embedding", "index": 0, "embedding": [0.1, 0.2]},
-            ],
-        }
+    def json(self) -> dict[str, Any]:
+        return self._body
 
 
 class _FakeClient:
-    headers: dict | None = None
+    """Stands in for httpx.Client; records the request and returns `body`."""
+
+    headers: Mapping[str, str] | None = None
     base_url: str | None = None
-    last_json: dict | None = None
+    # Any: JSON bodies.
+    last_json: ClassVar[dict[str, Any]] = {}
+    # Deliberately out of order, to check sorting by index.
+    body: ClassVar[dict[str, Any]] = {
+        "object": "list",
+        "data": [
+            {"object": "embedding", "index": 1, "embedding": [0.3, 0.4]},
+            {"object": "embedding", "index": 0, "embedding": [0.1, 0.2]},
+        ],
+    }
 
-    def __init__(
-        self,
-        base_url: str,
-        headers: dict | None,
-        timeout: int,  # noqa: ARG002
-    ) -> None:
-        self.__class__.headers = headers
-        self.__class__.base_url = base_url
+    def __init__(self, base_url: str, headers: Mapping[str, str] | None, timeout: int) -> None:
+        type(self).headers = headers
+        type(self).base_url = base_url
 
-    def post(self, path: str, json: dict) -> _FakeResponse:  # noqa: A002
+    # Any: a JSON request body.
+    def post(self, path: str, json: dict[str, Any]) -> _FakeResponse:
         assert path == "/embeddings"
         assert json["model"] == "text-embedding-3-small"
-        self.__class__.last_json = json
-        return _FakeResponse()
+        type(self).last_json = json
+        return _FakeResponse(self.body)
+
+
+class _Vector(list[float]):
+    """Like a numpy row: has tolist()."""
+
+    def tolist(self) -> list[float]:
+        return list(self)
 
 
 class _FakeSentenceTransformer:
     def __init__(self, model_name: str, cache_folder: str | None = None) -> None:
         self.model_name = model_name
         self.cache_folder = cache_folder
+        self.seen: list[str] = []
 
-    def encode(self, chunks: list[str], show_progress_bar: bool = False) -> list[list[float]]:  # noqa: ARG002
-        return [[0.5, 0.6] for _ in chunks]
+    def encode(self, chunks: list[str], show_progress_bar: bool = False) -> list[Sequence[float]]:
+        self.seen = chunks
+        # Mix numpy-like rows (with tolist) and plain tuples.
+        return [_Vector([1.0, 2.0]) if i % 2 == 0 else (3.0, 4.0) for i in range(len(chunks))]
 
 
-def test_openai_embedder_calls_embeddings_api(monkeypatch) -> None:
-    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
-    embedder = OpenAIEmbedder(
+def _openai(
+    api_key: str | None = None,
+    dimensions: int | None = None,
+    base_url: str = "https://api.openai.com/v1",
+) -> OpenAIEmbedder:
+    return OpenAIEmbedder(
         model_name="text-embedding-3-small",
-        base_url="https://api.openai.com/v1/",
-        api_key=None,
+        base_url=base_url,
+        api_key=api_key,
         timeout_seconds=30,
+        dimensions=dimensions,
     )
-    vectors = embedder.encode(["a", "b"])
+
+
+def test_openai_embedder_calls_embeddings_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    vectors = _openai(base_url="https://api.openai.com/v1/").encode(["a", "b"])
     assert _FakeClient.base_url == "https://api.openai.com/v1"
     assert _FakeClient.headers is None
     assert _FakeClient.last_json["input"] == ["a", "b"]
+    assert _FakeClient.last_json["encoding_format"] == "float"
     assert "dimensions" not in _FakeClient.last_json
     assert vectors == [[0.1, 0.2], [0.3, 0.4]]
 
 
-def test_openai_embedder_sends_dimensions(monkeypatch) -> None:
-    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
-    embedder = OpenAIEmbedder(
-        model_name="text-embedding-3-small",
-        base_url="https://api.openai.com/v1",
-        api_key=None,
-        timeout_seconds=30,
-        dimensions=256,
-    )
-    embedder.encode(["a", "b"])
+def test_openai_embedder_sends_dimensions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    _openai(dimensions=256).encode(["a", "b"])
     assert _FakeClient.last_json["dimensions"] == 256
 
 
-def test_openai_embedder_rejects_bad_response(monkeypatch) -> None:
-    class _BadResponse(_FakeResponse):
-        def json(self) -> dict:
-            return {"error": "nope"}
-
-    class _BadClient(_FakeClient):
-        def post(self, path: str, json: dict) -> _FakeResponse:  # noqa: A002, ARG002
-            return _BadResponse()
-
-    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _BadClient)
-    embedder = OpenAIEmbedder(
-        model_name="text-embedding-3-small",
-        base_url="https://api.openai.com/v1",
-        api_key=None,
-        timeout_seconds=30,
-    )
-    with pytest.raises(ValueError):
-        embedder.encode(["a", "b"])
-
-
-def test_openai_embedder_empty_input_skips_request(monkeypatch) -> None:
-    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
-    embedder = OpenAIEmbedder(
-        model_name="text-embedding-3-small",
-        base_url="https://api.openai.com/v1",
-        api_key=None,
-        timeout_seconds=30,
-    )
-    assert embedder.encode([]) == []
-
-
-def test_build_embedder_uses_openai_provider(monkeypatch) -> None:
-    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
-    settings = Settings(
-        calibre_metadata_db="db.sqlite",
-        calibre_library_root="/tmp",
-        calibre_web_base_url=None,
-        calibre_download_url_template=None,
-        qdrant_url="http://qdrant:6333",
-        qdrant_api_key=None,
-        qdrant_collection="books",
-        embedding_provider="openai",
-        embedding_model="text-embedding-3-small",
-        hf_cache_dir=None,
-        openai_base_url="http://localhost:11434/v1",
-        openai_api_key=None,
-        openai_timeout_seconds=30,
-        chunk_size=1000,
-        chunk_overlap=100,
-        batch_size=10,
-        distance="cosine",
-        vector_size=2,
-        embedding_context_length=8192,
-    )
-    embedder = build_embedder(settings)
-    assert isinstance(embedder, OpenAIEmbedder)
-    assert embedder.max_tokens == 8192
-
-
-def test_build_embedder_uses_st_cache_directory(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "calibre_web2rag.embeddings._load_sentence_transformer",
-        lambda: _FakeSentenceTransformer,
-    )
-    settings = Settings(
-        calibre_metadata_db="db.sqlite",
-        calibre_library_root="/tmp",
-        calibre_web_base_url=None,
-        calibre_download_url_template=None,
-        qdrant_url="http://qdrant:6333",
-        qdrant_api_key=None,
-        qdrant_collection="books",
-        embedding_provider="sentence_transformers",
-        embedding_model="sentence-transformers/all-MiniLM-L6-v2",
-        hf_cache_dir="/tmp/hf-cache",
-        openai_base_url="http://localhost:11434/v1",
-        openai_api_key=None,
-        openai_timeout_seconds=30,
-        chunk_size=1000,
-        chunk_overlap=100,
-        batch_size=10,
-        distance="cosine",
-        vector_size=2,
-        embedding_context_length=8192,
-    )
-    embedder = build_embedder(settings)
-    assert isinstance(embedder, SentenceTransformerEmbedder)
-    assert embedder._model.cache_folder == "/tmp/hf-cache"
-
-
-def test_openai_embedder_uses_api_key_header(monkeypatch) -> None:
-    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
-    OpenAIEmbedder(
-        model_name="text-embedding-3-small",
-        base_url="https://api.openai.com/v1",
-        api_key="secret",
-        timeout_seconds=30,
-    )
+def test_openai_embedder_uses_api_key_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    _openai(api_key="secret")
     assert _FakeClient.headers == {"Authorization": "Bearer secret"}
 
 
-def test_truncate_shortens_long_texts() -> None:
-    short = "hello"
-    long_text = "x" * 100
-    result = _truncate([short, long_text], max_tokens=10)
-    assert result[0] == short
-    assert len(result[1]) == 10 * 4  # _CHARS_PER_TOKEN = 4
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"error": "model not found"},
+        {"data": [{"index": 0, "embedding": [0.1]}]},  # one vector for two inputs
+    ],
+)
+def test_openai_embedder_rejects_bad_response(
+    monkeypatch: pytest.MonkeyPatch, body: dict[str, Any]
+) -> None:
+    class _BadClient(_FakeClient):
+        pass
+
+    _BadClient.body = body
+    monkeypatch.setattr(httpx, "Client", _BadClient)
+    with pytest.raises(ValueError, match="missing 'data' or wrong length"):
+        _openai().encode(["a", "b"])
 
 
-def test_truncate_noop_when_disabled() -> None:
-    long_text = "x" * 100
-    result = _truncate([long_text], max_tokens=0)
-    assert result[0] == long_text
+def test_openai_embedder_empty_input_skips_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _NoPostClient(_FakeClient):
+        # Any: a JSON request body.
+        def post(self, path: str, json: dict[str, Any]) -> _FakeResponse:
+            raise AssertionError("no request expected")
+
+    monkeypatch.setattr(httpx, "Client", _NoPostClient)
+    assert _openai().encode([]) == []
+
+
+def test_openai_embedder_splits_large_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+
+    class _EchoClient(_FakeClient):
+        # Any: a JSON request body.
+        def post(self, path: str, json: dict[str, Any]) -> _FakeResponse:
+            n = len(json["input"])
+            calls.append(n)
+            return _FakeResponse(
+                {"data": [{"index": i, "embedding": [float(i)]} for i in range(n)]}
+            )
+
+    monkeypatch.setattr(httpx, "Client", _EchoClient)
+    monkeypatch.setattr(embeddings, "_OPENAI_MAX_INPUTS_PER_REQUEST", 3)
+    assert len(_openai().encode(["t"] * 7)) == 7
+    assert calls == [3, 3, 1]
 
 
 def test_request_batches_respects_input_cap() -> None:
@@ -212,42 +179,6 @@ def test_request_batches_respects_token_cap() -> None:
     assert [len(b) for b in batches] == [2, 2]
 
 
-def test_openai_embedder_splits_large_inputs(monkeypatch) -> None:
-    calls: list[int] = []
-
-    class _EchoClient(_FakeClient):
-        def post(self, path: str, json: dict):  # noqa: A002, ARG002
-            n = len(json["input"])
-            calls.append(n)
-
-            class _R:
-                def raise_for_status(self) -> None:
-                    return None
-
-                def json(self) -> dict:
-                    return {
-                        "data": [
-                            {"index": i, "embedding": [float(i)]} for i in range(n)
-                        ]
-                    }
-
-            return _R()
-
-    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _EchoClient)
-    monkeypatch.setattr(
-        "calibre_web2rag.embeddings._OPENAI_MAX_INPUTS_PER_REQUEST", 3
-    )
-    embedder = OpenAIEmbedder(
-        model_name="text-embedding-3-small",
-        base_url="https://api.openai.com/v1",
-        api_key=None,
-        timeout_seconds=30,
-    )
-    vectors = embedder.encode(["t"] * 7)
-    assert len(vectors) == 7
-    assert calls == [3, 3, 1]
-
-
 def test_estimate_tokens_counts_cjk_per_character() -> None:
     assert _estimate_tokens("x" * 400) == 101
     assert _estimate_tokens("漢" * 400) == 401
@@ -257,6 +188,71 @@ def test_request_batches_splits_cjk_text() -> None:
     cjk = "漢" * 100  # ~101 estimated tokens each, not ~26
     batches = _request_batches([cjk] * 4, max_inputs=100, max_tokens=250)
     assert [len(b) for b in batches] == [2, 2]
+
+
+def test_build_embedder_uses_openai_provider(
+    monkeypatch: pytest.MonkeyPatch, make_settings: SettingsFactory
+) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    embedder = build_embedder(make_settings(embedding_dimensions=256))
+    assert isinstance(embedder, OpenAIEmbedder)
+    assert embedder.max_tokens == 8192
+    assert embedder.dimensions == 256
+    assert _FakeClient.base_url == "http://localhost:11434/v1"
+
+
+def test_build_embedder_uses_st_cache_directory(
+    monkeypatch: pytest.MonkeyPatch, make_settings: SettingsFactory
+) -> None:
+    monkeypatch.setattr(embeddings, "_load_sentence_transformer", lambda: _FakeSentenceTransformer)
+    settings = make_settings(embedding_provider="sentence_transformers", hf_cache_dir="/hf-cache")
+    embedder = build_embedder(settings)
+    assert isinstance(embedder, SentenceTransformerEmbedder)
+    assert embedder._model.cache_folder == "/hf-cache"
+
+
+def test_build_embedder_unsupported_provider(make_settings: SettingsFactory) -> None:
+    with pytest.raises(ValueError, match="Unsupported EMBEDDING_PROVIDER 'ollama'"):
+        build_embedder(make_settings(embedding_provider="ollama"))
+
+
+def test_sentence_transformer_encode_and_truncate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(embeddings, "_load_sentence_transformer", lambda: _FakeSentenceTransformer)
+    embedder = SentenceTransformerEmbedder(model_name="m", max_tokens=2)
+    assert embedder.encode(["x" * 100, "short"]) == [[1.0, 2.0], [3.0, 4.0]]
+    assert embedder._model.seen == ["x" * 8, "short"]
+
+
+def test_load_sentence_transformer_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_import = builtins.__import__
+
+    # Any: __import__'s signature.
+    def _import(name: str, *args: Any, **kwargs: Any) -> types.ModuleType:
+        if name == "sentence_transformers":
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _import)
+    with pytest.raises(ImportError, match="pip install calibre-web2rag"):
+        _load_sentence_transformer()
+
+
+def test_load_sentence_transformer_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = types.ModuleType("sentence_transformers")
+    setattr(fake, "SentenceTransformer", _FakeSentenceTransformer)  # noqa: B010 -- module has no such attribute for mypy
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake)
+    assert _load_sentence_transformer() is _FakeSentenceTransformer
+
+
+def test_truncate_shortens_long_texts() -> None:
+    result = _truncate(["hello", "x" * 100], max_tokens=10)
+    assert result[0] == "hello"
+    assert len(result[1]) == 10 * 4  # _CHARS_PER_TOKEN = 4
+
+
+def test_truncate_noop_when_disabled() -> None:
+    long_text = "x" * 100
+    assert _truncate([long_text], max_tokens=0) == [long_text]
 
 
 def test_truncate_prepends_prefix_and_counts_it() -> None:
@@ -269,16 +265,13 @@ def test_truncate_prefix_without_limit() -> None:
     assert _truncate(["abc"], max_tokens=0, prefix="q: ") == ["q: abc"]
 
 
-def test_openai_embedder_applies_query_and_document_prefixes(monkeypatch) -> None:
-    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
-    embedder = OpenAIEmbedder(
-        model_name="text-embedding-3-small",
-        base_url="http://localhost:8080/v1",
-        api_key=None,
-        timeout_seconds=30,
-        prefixes=_Prefixes(
-            query_prefix="search_query: ", document_prefix="search_document: "
-        ),
+def test_openai_embedder_applies_query_and_document_prefixes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    embedder = _openai()
+    embedder.prefixes = _Prefixes(
+        query_prefix="search_query: ", document_prefix="search_document: "
     )
     embedder.encode(["a", "b"])
     assert _FakeClient.last_json["input"] == ["search_document: a", "search_document: b"]
@@ -286,68 +279,26 @@ def test_openai_embedder_applies_query_and_document_prefixes(monkeypatch) -> Non
     assert _FakeClient.last_json["input"] == ["search_query: a", "search_query: b"]
 
 
-def test_openai_embedder_no_prefix_by_default(monkeypatch) -> None:
-    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
-    embedder = OpenAIEmbedder(
-        model_name="text-embedding-3-small",
-        base_url="http://localhost:8080/v1",
-        api_key=None,
-        timeout_seconds=30,
-    )
-    embedder.encode(["a", "b"], kind="query")
+def test_openai_embedder_no_prefix_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    _openai().encode(["a", "b"], kind="query")
     assert _FakeClient.last_json["input"] == ["a", "b"]
 
 
-def test_embedder_rejects_unknown_kind(monkeypatch) -> None:
-    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
-    embedder = OpenAIEmbedder(
-        model_name="text-embedding-3-small",
-        base_url="http://localhost:8080/v1",
-        api_key=None,
-        timeout_seconds=30,
-    )
-    with pytest.raises(ValueError):
-        embedder.encode(["a"], kind="passage")  # type: ignore[arg-type]
+def test_embedder_rejects_unknown_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    with pytest.raises(ValueError, match="Unknown embedding kind"):
+        _openai().encode(["a"], kind="passage")  # type: ignore[arg-type]
 
 
-def test_build_embedder_passes_prefixes_from_settings(monkeypatch) -> None:
-    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
-    settings = Settings(
-        calibre_metadata_db="db.sqlite",
-        calibre_library_root="/tmp",
-        calibre_web_base_url=None,
-        calibre_download_url_template=None,
-        qdrant_url="http://qdrant:6333",
-        qdrant_api_key=None,
-        qdrant_collection="books",
-        embedding_provider="openai",
-        embedding_model="nomic-ai/modernbert-embed-base",
-        hf_cache_dir=None,
-        openai_base_url="http://localhost:8080/v1",
-        openai_api_key=None,
-        openai_timeout_seconds=30,
-        chunk_size=1000,
-        chunk_overlap=100,
-        batch_size=10,
-        distance="cosine",
-        vector_size=768,
-        embedding_context_length=8192,
-        embedding_query_prefix="search_query: ",
-        embedding_document_prefix="search_document: ",
+def test_build_embedder_passes_prefixes_from_settings(
+    monkeypatch: pytest.MonkeyPatch, make_settings: SettingsFactory
+) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    settings = make_settings(
+        embedding_query_prefix="search_query: ", embedding_document_prefix="search_document: "
     )
     embedder = build_embedder(settings)
+    assert isinstance(embedder, OpenAIEmbedder)
     assert embedder.prefixes.for_kind("query") == "search_query: "
     assert embedder.prefixes.for_kind("document") == "search_document: "
-
-
-def test_load_settings_reads_prefixes(monkeypatch) -> None:
-    from calibre_web2rag.config import load_settings
-
-    monkeypatch.setattr("calibre_web2rag.config.load_dotenv", lambda: None)
-    monkeypatch.setenv("CALIBRE_METADATA_DB", "db.sqlite")
-    monkeypatch.setenv("CALIBRE_LIBRARY_ROOT", "/tmp")
-    monkeypatch.setenv("EMBEDDING_QUERY_PREFIX", "query: ")
-    monkeypatch.setenv("EMBEDDING_DOCUMENT_PREFIX", "passage: ")
-    settings = load_settings()
-    assert settings.embedding_query_prefix == "query: "
-    assert settings.embedding_document_prefix == "passage: "

@@ -1,0 +1,60 @@
+# Production: runs the released image from ghcr.io with Qdrant. Configure it
+# in .env next to this file (see .env.example and docs/configuration.md).
+#
+#   docker compose -f docker-compose.prod.yaml up -d
+#   docker compose -f docker-compose.prod.yaml run --rm app   # re-ingest
+#   APP_VERSION=1.2.3 docker compose -f docker-compose.prod.yaml up -d   # pin a release
+#   docker compose -f docker-compose.prod.yaml build   # build the image locally instead
+#
+# The ingester is a batch job: it reads the library once, upserts into
+# Qdrant and exits. Run it again (from cron or by hand) to pick up new
+# books; re-ingesting is idempotent. So it has no port, no health check and
+# doesn't restart, unlike a long-running service.
+
+services:
+  app:
+    image: ghcr.io/romkey/pdxhackerspace-calibre-web-rag-injester:${APP_VERSION:-latest}
+    build:
+      context: .
+      target: production
+    restart: "no"
+    # On SIGTERM it finishes the file it is embedding (requests can take up
+    # to OPENAI_TIMEOUT_SECONDS each) and upserts; don't SIGKILL it at 10s.
+    stop_grace_period: 5m
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      QDRANT_URL: http://qdrant:6333
+    volumes:
+      - ${CALIBRE_LIBRARY_ROOT:-/data/calibre}:${CALIBRE_LIBRARY_ROOT:-/data/calibre}:ro
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    # Least privilege: nothing to write but /tmp, no capabilities.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  qdrant-data:

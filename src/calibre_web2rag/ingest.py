@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 from collections import Counter
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Any, Protocol
 
 from bs4 import BeautifulSoup
 from qdrant_client.models import PointStruct
@@ -24,10 +27,14 @@ from calibre_web2rag.qdrant_store import QdrantStore
 logger = logging.getLogger(__name__)
 
 
+class BookSource(Protocol):
+    """Where books come from: CalibreRepository, or a fake in tests."""
+
+    def fetch_books(self) -> list[BookRecord]: ...
+
+
 def _safe_extract_sections(fmt: str, path: str) -> list[TextSection]:
     """Combined DRM-check and extraction in a single pass per format."""
-    from pathlib import Path
-
     p = Path(path)
     if fmt == "PDF":
         return try_extract_pdf_sections(p)
@@ -121,8 +128,7 @@ def _build_library_summary_text(books: list[BookRecord]) -> str:
             format_counts[f.format] += 1
 
     lines = [
-        f"This ebook library contains {len(books)} books "
-        f"by {len(author_counts)} authors.",
+        f"This ebook library contains {len(books)} books by {len(author_counts)} authors.",
     ]
 
     if format_counts:
@@ -166,7 +172,8 @@ def _build_library_summary_points(
     vectors = embedder.encode(chunks, kind="document")
     points: list[PointStruct] = []
     for idx, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
-        payload = {
+        # Any: Qdrant payloads are arbitrary JSON.
+        payload: dict[str, Any] = {
             "book_id": None,
             "title": None,
             "authors": [],
@@ -210,7 +217,12 @@ def _build_library_summary_points(
 # ---------------------------------------------------------------------------
 
 
-def ingest(settings: Settings) -> int:
+def ingest(settings: Settings, *, stop: threading.Event | None = None) -> int:
+    """Ingest the whole library; returns the number of points upserted.
+
+    If ``stop`` is set (e.g. on SIGTERM), finishes the file being read,
+    upserts the points it already has, and returns.
+    """
     repo = CalibreRepository(settings.calibre_metadata_db, settings.calibre_library_root)
     embedder = build_embedder(settings)
     store = QdrantStore(
@@ -222,25 +234,34 @@ def ingest(settings: Settings) -> int:
     )
 
     inserted = 0
-    for batch in _generate_points(repo=repo, embedder=embedder, settings=settings):
+    for batch in _generate_points(repo=repo, embedder=embedder, settings=settings, stop=stop):
         store.upsert(batch)
         inserted += len(batch)
         logger.info("Upserted %s chunks to Qdrant (total=%s)", len(batch), inserted)
     return inserted
 
 
+def _stopping(stop: threading.Event | None) -> bool:
+    return stop is not None and stop.is_set()
+
+
 def _generate_points(
     *,
-    repo: CalibreRepository,
+    repo: BookSource,
     embedder: Embedder,
     settings: Settings,
+    stop: threading.Event | None = None,
 ) -> Iterator[list[PointStruct]]:
+    # On stop, the points already built are still yielded, then it returns.
     batch: list[PointStruct] = []
     books = repo.fetch_books()
 
     for book in books:
+        if _stopping(stop):
+            logger.info("Stopping early as requested")
+            break
         try:
-            new_points = _process_book(book=book, embedder=embedder, settings=settings)
+            new_points = _process_book(book=book, embedder=embedder, settings=settings, stop=stop)
             for point in new_points:
                 batch.append(point)
                 if len(batch) >= settings.batch_size:
@@ -255,7 +276,7 @@ def _generate_points(
             continue
 
     # Library-wide catalog summary
-    if books:
+    if books and not _stopping(stop):
         for point in _build_library_summary_points(
             books=books, embedder=embedder, settings=settings
         ):
@@ -273,6 +294,7 @@ def _process_book(
     book: BookRecord,
     embedder: Embedder,
     settings: Settings,
+    stop: threading.Event | None = None,
 ) -> list[PointStruct]:
     points: list[PointStruct] = []
     logger.info(
@@ -312,9 +334,7 @@ def _process_book(
         if desc_chunks:
             contextualized = [_contextualize(book, c) for c in desc_chunks]
             vectors = embedder.encode(contextualized, kind="document")
-            for idx, (ctx_chunk, vec) in enumerate(
-                zip(contextualized, vectors, strict=True)
-            ):
+            for idx, (ctx_chunk, vec) in enumerate(zip(contextualized, vectors, strict=True)):
                 points.append(
                     _build_point(
                         book=book,
@@ -338,6 +358,9 @@ def _process_book(
 
     # Index content from each file
     for file in book.files:
+        if _stopping(stop):
+            # Partial books are fine: point IDs are stable, a re-run completes it.
+            break
         file_path = str(file.file_path)
         logger.info(
             "Reading file for book id=%s format=%s path=%s",
@@ -347,9 +370,7 @@ def _process_book(
         )
         sections = _safe_extract_sections(file.format, file_path)
         if not sections:
-            logger.info(
-                "Skipping unreadable or empty file: %s", file_path
-            )
+            logger.info("Skipping unreadable or empty file: %s", file_path)
             continue
 
         all_items: list[tuple[str | None, str]] = []
@@ -373,10 +394,7 @@ def _process_book(
             file.format,
         )
 
-        contextualized = [
-            _contextualize(book, chunk, chapter=title)
-            for title, chunk in all_items
-        ]
+        contextualized = [_contextualize(book, chunk, chapter=title) for title, chunk in all_items]
         vectors = embedder.encode(contextualized, kind="document")
 
         for idx, ((chapter_title, _raw), ctx_chunk, vec) in enumerate(

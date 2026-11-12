@@ -1,49 +1,94 @@
-[build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "calibre-web2rag"
 version = "0.2.3"
 description = "RAG ingester for Calibre Web libraries into Qdrant"
 readme = "README.md"
-requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "John Romkey" }]
+# Keep in step with .python-version and the Dockerfile's python image.
+requires-python = ">=3.15"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.15",
+]
 dependencies = [
-  "qdrant-client>=1.11.0",
-  "pypdf>=5.0.1",
-  "ebooklib>=0.18",
-  "beautifulsoup4>=4.12.3",
-  "mobi>=0.3.3",
-  "python-dotenv>=1.0.1",
-  "httpx>=0.28.0",
+  "beautifulsoup4>=4.15.0",
+  "ebooklib>=0.21",
+  "httpx>=0.28.1",
+  "mobi>=0.4.1",
+  "pypdf>=7.0.1",
+  "python-dotenv>=1.2.4",
+  "qdrant-client>=1.20.0",
 ]
 
 [project.optional-dependencies]
 sentence-transformers = [
-  "sentence-transformers>=3.1.1",
+  "sentence-transformers>=6.3.0",
 ]
-dev = [
-  "pytest>=8.3.3",
-  "pytest-cov>=5.0.0",
-  "ruff>=0.6.9",
-]
+
+[project.urls]
+Homepage = "https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester"
+Changelog = "https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/blob/main/CHANGELOG.md"
+Issues = "https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/issues"
 
 [project.scripts]
-calibre-web2rag = "calibre_web2rag.cli:main"
+calibre-web2rag = "calibre_web2rag.__main__:main"
 
-[tool.setuptools]
-package-dir = {"" = "src"}
+[dependency-groups]
+dev = [
+  "mypy>=2.4.1",
+  "pytest>=9.2.0",
+  "pytest-cov>=7.1.0",
+]
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = [
+  "E", "W", "F",  # pycodestyle, pyflakes
+  "I",            # import order
+  "N",            # naming
+  "UP",           # modern syntax for requires-python
+  "B",            # likely bugs
+  "S",            # security
+  "C4", "SIM", "RET", "PTH",
+  "DTZ",          # timezone-aware datetimes
+  "T20",          # no print(); use logging
+  "LOG", "G",     # logging calls
+  "PT",           # pytest style
+  "RUF",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]  # assert is how pytest works
+"scripts/**" = ["T20"]  # command-line tools print
+
+[tool.mypy]
+strict = true
+files = ["src", "tests", "scripts"]
+
+[[tool.mypy.overrides]]
+# mobi ships no type information; sentence-transformers is an optional extra
+# that isn't installed in the dev environment.
+module = ["mobi", "sentence_transformers"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = ["--cov", "--cov-report=term-missing", "--strict-markers"]
+testpaths = ["tests"]
+xfail_strict = true
+
+[tool.coverage.run]
+source = ["calibre_web2rag"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 95
+skip_covered = true
+exclude_also = ['if __name__ == "__main__":']

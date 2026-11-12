@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 from zipfile import ZipFile
@@ -11,12 +12,18 @@ from pypdf import PdfReader
 
 from calibre_web2rag.models import TextSection
 
+logger = logging.getLogger(__name__)
+
+# The parsers raise many exception types on damaged or unusual files, so the
+# checks below catch Exception, log why, and treat the file as unreadable.
+
 
 def is_pdf_drm_free(path: Path) -> bool:
     try:
         reader = PdfReader(str(path))
         return not reader.is_encrypted
-    except Exception:
+    except Exception as e:
+        logger.warning("Cannot read %s: %s", path, e)
         return False
 
 
@@ -29,7 +36,8 @@ def is_epub_drm_free(path: Path) -> bool:
                 data = archive.read("META-INF/encryption.xml")
                 return len(data.strip()) == 0
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning("Cannot read %s: %s", path, e)
         return False
 
 
@@ -41,7 +49,8 @@ def is_mobi_drm_free(path: Path) -> bool:
                 return False
             encryption_type = int.from_bytes(header[12:14], byteorder="big", signed=False)
             return encryption_type == 0
-    except Exception:
+    except Exception as e:
+        logger.warning("Cannot read %s: %s", path, e)
         return False
 
 
@@ -54,7 +63,8 @@ def extract_epub_text(path: Path) -> str:
     book = epub.read_epub(str(path))
     blocks: list[str] = []
     for item in book.get_items():
-        if item.get_type() != ITEM_DOCUMENT:
+        # Documents are read as EpubHtml; the nav page is one too, but not ITEM_DOCUMENT.
+        if not isinstance(item, epub.EpubHtml) or item.get_type() != ITEM_DOCUMENT:
             continue
         soup = BeautifulSoup(item.get_body_content(), "html.parser")
         text = soup.get_text(" ", strip=True)
@@ -85,7 +95,8 @@ def extract_epub_sections(path: Path) -> list[TextSection]:
     book = epub.read_epub(str(path))
     sections: list[TextSection] = []
     for item in book.get_items():
-        if item.get_type() != ITEM_DOCUMENT:
+        # Documents are read as EpubHtml; the nav page is one too, but not ITEM_DOCUMENT.
+        if not isinstance(item, epub.EpubHtml) or item.get_type() != ITEM_DOCUMENT:
             continue
         soup = BeautifulSoup(item.get_body_content(), "html.parser")
         title = None
@@ -125,13 +136,12 @@ def try_extract_pdf_sections(path: Path) -> list[TextSection]:
         reader = PdfReader(str(path))
         if reader.is_encrypted:
             return []
-        text = "\n".join(
-            (page.extract_text() or "") for page in reader.pages
-        )
+        text = "\n".join((page.extract_text() or "") for page in reader.pages)
         if not text.strip():
             return []
         return [TextSection(title=None, text=text)]
-    except Exception:
+    except Exception as e:
+        logger.warning("Cannot read %s: %s", path, e)
         return []
 
 
@@ -144,14 +154,16 @@ def try_extract_epub_sections(path: Path) -> list[TextSection]:
                 data = archive.read("META-INF/encryption.xml")
                 if len(data.strip()) > 0:
                     return []
-    except Exception:
+    except Exception as e:
+        logger.warning("Cannot read %s: %s", path, e)
         return []
 
     try:
         book = epub.read_epub(str(path))
         sections: list[TextSection] = []
         for item in book.get_items():
-            if item.get_type() != ITEM_DOCUMENT:
+            # Documents are read as EpubHtml; the nav page is one too, but not ITEM_DOCUMENT.
+            if not isinstance(item, epub.EpubHtml) or item.get_type() != ITEM_DOCUMENT:
                 continue
             soup = BeautifulSoup(item.get_body_content(), "html.parser")
             title = None
@@ -164,7 +176,8 @@ def try_extract_epub_sections(path: Path) -> list[TextSection]:
             if text:
                 sections.append(TextSection(title=title, text=text))
         return sections
-    except Exception:
+    except Exception as e:
+        logger.warning("Cannot read %s: %s", path, e)
         return []
 
 
@@ -175,9 +188,7 @@ def try_extract_mobi_sections(path: Path) -> list[TextSection]:
         tempdir, extracted = mobi.extract(str(path))
         try:
             extracted_path = Path(tempdir) / extracted
-            data = extracted_path.read_text(
-                encoding="utf-8", errors="ignore"
-            )
+            data = extracted_path.read_text(encoding="utf-8", errors="ignore")
             soup = BeautifulSoup(data, "html.parser")
             text = soup.get_text(" ", strip=True)
             if not text:
@@ -185,5 +196,6 @@ def try_extract_mobi_sections(path: Path) -> list[TextSection]:
             return [TextSection(title=None, text=text)]
         finally:
             shutil.rmtree(tempdir, ignore_errors=True)
-    except Exception:
+    except Exception as e:
+        logger.warning("Cannot read %s: %s", path, e)
         return []

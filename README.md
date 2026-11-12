@@ -1,87 +1,144 @@
 # calibre-web2rag
 
-`calibre-web2rag` ingests Calibre library content and metadata into Qdrant for RAG workloads.
+[![CI](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/ci.yaml/badge.svg)](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/ci.yaml)
+[![Lint](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/lint.yaml/badge.svg)](https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/actions/workflows/lint.yaml)
+[![Python 3.15](https://img.shields.io/badge/python-3.15-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-It reads Calibre metadata from `metadata.db`, ingests DRM-free `PDF`, `EPUB`, and `MOBI` files, extracts text, chunks it, creates embeddings, and upserts points with rich payload metadata (authors, tags, identifiers, file links, and Calibre Web URLs where configured).
+`calibre-web2rag` turns a Calibre ebook library into a Qdrant vector
+collection for retrieval-augmented generation (RAG). It reads book metadata
+straight from Calibre's `metadata.db`, extracts the text of DRM-free PDF,
+EPUB and MOBI files, splits it into overlapping sentence-aware chunks,
+embeds them through the OpenAI embeddings API (OpenAI itself, or a
+compatible server such as Ollama, vLLM or LM Studio) or with local
+sentence-transformers, and upserts them with rich
+payloads (authors, tags, series, identifiers, chapter titles, and links
+back to Calibre Web), so an LLM can answer both "what does this book say
+about X?" and "which books do I have by Y?".
 
-## Features
+> **AI disclosure:** This project was written by AI under human oversight,
+> following [these rules](https://github.com/romkey/python-ai-rules/blob/main/RULES.md).
 
-- Reads Calibre metadata directly from SQLite.
-- Includes book metadata, identifiers, tags, publisher, series, languages, and comments in payloads.
-- Adds ebook links:
-  - `source_url` from `CALIBRE_WEB_DOWNLOAD_URL_TEMPLATE` or `CALIBRE_WEB_BASE_URL`.
-  - `opds_url` from `CALIBRE_WEB_BASE_URL`.
-- Skips files that appear DRM-protected.
-- Uses Qdrant as the vector store.
-- Supports embeddings via the OpenAI embeddings API (OpenAI or any OpenAI-compatible server such as Ollama, vLLM, LM Studio) or local SentenceTransformers (`EMBEDDING_PROVIDER`).
-- Runs via Docker/Compose.
-- Includes local + Docker-based tests.
-- Uses semantic versioning (`MAJOR.MINOR.PATCH`) and Git tags (`vMAJOR.MINOR.PATCH`).
+## What's here
 
-## Configuration
+| Path | What it is |
+|------|------------|
+| `src/calibre_web2rag/__main__.py` | Command line: logging, SIGTERM handling, exit codes |
+| `src/calibre_web2rag/config.py` | Settings from environment variables, validated at startup |
+| `src/calibre_web2rag/calibre_db.py` | Reads books and their files from Calibre's SQLite database |
+| `src/calibre_web2rag/extractors.py` | DRM checks and text extraction for PDF, EPUB and MOBI |
+| `src/calibre_web2rag/chunking.py` | Sentence-aware chunking with overlap |
+| `src/calibre_web2rag/embeddings.py` | OpenAI-API and sentence-transformers embedders |
+| `src/calibre_web2rag/ingest.py` | Builds points and payloads and drives the run |
+| `src/calibre_web2rag/qdrant_store.py` | Creates the collection and payload indexes, upserts points |
+| `src/calibre_web2rag/links.py` | Calibre Web download and OPDS links |
+| `tests/` | pytest tests, one file per module |
+| `docs/configuration.md` | Every environment variable |
+| `docs/overview.md` | Short architecture summary |
 
-All configuration is done by environment variables outside the container.
+## Technical details
 
-1. Copy `.env.example` to `.env`.
-2. Fill paths and endpoints.
+The ingester is a batch job: each run reads the whole library, upserts
+into Qdrant and exits. Point IDs are deterministic (UUID5 of book, format,
+chunk index and text), so re-running updates points in place instead of
+duplicating them. Run it again, by hand or from cron, to pick up new books.
 
-Required:
+For each book with at least one PDF, EPUB or MOBI file it writes:
 
-- `CALIBRE_METADATA_DB`
-- `CALIBRE_LIBRARY_ROOT`
+- a `book_metadata` point: title, authors, publisher, series, tags,
+  languages, ISBN, rating, formats and description, for catalog questions;
+- `description` points from the Calibre comments;
+- `content` points from each file's text. EPUB chapters keep their
+  heading as `chapter_title`. Each chunk is prefixed with the book's title,
+  authors, tags and series so its embedding carries that context.
 
-Common optional variables:
+It also writes `library_summary` points describing the whole collection
+(counts of books, authors, formats, languages, categories and series).
 
-- `CALIBRE_WEB_BASE_URL`
-- `CALIBRE_WEB_DOWNLOAD_URL_TEMPLATE`
-- `QDRANT_URL`
-- `QDRANT_COLLECTION`
-- `EMBEDDING_PROVIDER` (`openai` (default) or `sentence_transformers`)
-- `EMBEDDING_MODEL` (default `nomic-ai/modernbert-embed-base`, ModernBERT from Hugging Face)
-- `OPENAI_BASE_URL` (default `http://localhost:8080/v1`, a local OpenAI-compatible server; use `https://api.openai.com/v1` for OpenAI)
-- `OPENAI_API_KEY` (optional; sent as `Authorization: Bearer ...` when set)
-- `OPENAI_TIMEOUT_SECONDS` (default `120`)
-- `EMBEDDING_DIMENSIONS` (optional; reduced output dimensions for `text-embedding-3-*`)
-- `VECTOR_SIZE` (default `768`; must match the embedding model's output dimension)
-- `EMBEDDING_QUERY_PREFIX` / `EMBEDDING_DOCUMENT_PREFIX` (optional; see [Embedding prompts](#embedding-prompts))
-- `HF_CACHE_DIR` (for Hugging Face model caching with `sentence_transformers`)
-- `HF_CACHE_HOST_DIR` (host path mapped to `HF_CACHE_DIR` in Docker)
-- `CHUNK_SIZE`
-- `CHUNK_OVERLAP`
-- `BATCH_SIZE`
+Every payload has `chunk_type` and `chunk_text`, plus the book's metadata,
+`source_url` (from `CALIBRE_WEB_DOWNLOAD_URL_TEMPLATE` or
+`CALIBRE_WEB_BASE_URL`) and `opds_url`. Keyword payload indexes are created
+on `authors`, `tags`, `languages`, `series`, `publisher` and `chunk_type`,
+and an integer index on `book_id`, for filtered search.
 
-## Embedding prompts
+Encrypted PDFs and EPUBs with an `encryption.xml` manifest are skipped as
+DRM-protected; MOBI files are skipped if they can't be unpacked. A file or
+book that fails is logged and skipped without stopping the run. Texts
+longer than the embedding model's context (`EMBEDDING_CONTEXT_LENGTH`) are
+truncated.
+
+Command line:
+
+```bash
+calibre-web2rag            # ingest, configured by environment variables
+calibre-web2rag --version
+```
+
+Exit codes: 0 on success (including a clean stop on SIGTERM, which
+finishes the file being read, upserts the points it has and exits), 1 if
+ingestion fails, 2 for invalid configuration.
+
+## Running it
+
+Requires Docker. Configuration comes from environment variables, kept in
+`.env` (see [docs/configuration.md](docs/configuration.md)):
+
+```bash
+cp .env.example .env   # then edit it: at least CALIBRE_METADATA_DB and CALIBRE_LIBRARY_ROOT
+docker compose -f docker-compose.prod.yaml up -d
+```
+
+That starts Qdrant (on port 6333) and runs the latest release of
+`ghcr.io/romkey/pdxhackerspace-calibre-web-rag-injester` once against it,
+with your library mounted read-only. Set `APP_VERSION=X.Y.Z` to pin a
+release. To ingest again:
+
+```bash
+docker compose -f docker-compose.prod.yaml run --rm app
+```
+
+By default it embeds with ModernBERT (`nomic-ai/modernbert-embed-base`,
+768 dimensions) from a local OpenAI-compatible server at
+`http://localhost:8080/v1`, such as Hugging Face text-embeddings-inference,
+vLLM or Infinity. Inside the container `localhost` is the container itself,
+so set `OPENAI_BASE_URL` to the server's reachable address (for example
+`http://host.docker.internal:8080/v1`). For OpenAI, set
+`OPENAI_BASE_URL=https://api.openai.com/v1`, `OPENAI_API_KEY`, an
+`EMBEDDING_MODEL` such as `text-embedding-3-small`, and empty prefixes.
+Make sure `VECTOR_SIZE` matches the model's dimension.
+
+To embed locally with Ollama on an NVIDIA GPU instead (Linux with the
+NVIDIA container toolkit), add the override file. It runs Ollama, pulls
+`OLLAMA_EMBEDDING_MODEL` (default `nomic-embed-text`, 768 dimensions; set
+`OLLAMA_VECTOR_SIZE` for another model), and points the ingester at
+Ollama's OpenAI-compatible API; no API key is needed:
+
+```bash
+docker compose -f docker-compose.prod.yaml -f docker-compose.ollama.yaml up -d
+```
+
+`nomic-embed-text` uses the same prefixes as ModernBERT (below); change
+them if you pick another Ollama model.
+
+### Embedding prefixes
 
 Many embedding models expect a task prefix on each input: one for search
-queries and another for the documents being searched. Set them with
-`EMBEDDING_QUERY_PREFIX` and `EMBEDDING_DOCUMENT_PREFIX`. Both are empty by
-default, so nothing is added unless you set them.
+queries, another for the documents being searched. Set them with
+`EMBEDDING_QUERY_PREFIX` and `EMBEDDING_DOCUMENT_PREFIX`; both are empty
+unless set, and `.env.example` sets the ModernBERT ones (`search_query: ` /
+`search_document: `). [docs/configuration.md](docs/configuration.md) lists
+the prefixes for other models.
 
-| Model | Query prefix | Document prefix |
-| --- | --- | --- |
-| `nomic-ai/modernbert-embed-base` (default) | `search_query: ` | `search_document: ` |
-| `nomic-embed-text` | `search_query: ` | `search_document: ` |
-| e5 family | `query: ` | `passage: ` |
-| `mxbai-embed-large` | `Represent this sentence for searching relevant passages: ` | none |
-| Qwen3-Embedding and similar | an instruction line, e.g. `Instruct: <task>\nQuery: ` | none |
-| OpenAI `text-embedding-3-*` | none | none |
-
-`.env.example` sets the ModernBERT prefixes. Put the values in double quotes
-in `.env` so the trailing space is kept.
-
-- The ingester embeds every stored point (book text, descriptions, book metadata and
-  the library summary) with the **document** prefix.
-- The prefix counts toward `EMBEDDING_CONTEXT_LENGTH` when long text is truncated.
-- Changing `EMBEDDING_DOCUMENT_PREFIX` changes every stored vector. Re-run the
-  ingester so the whole library is re-embedded (points are overwritten in place).
+- The ingester embeds every point it stores with the **document** prefix.
+- Changing `EMBEDDING_DOCUMENT_PREFIX` changes every stored vector: re-run
+  the ingester to re-embed the library (points are overwritten in place).
 - Anything that searches the collection must embed its queries with the
-  **query** prefix; see [Querying the collection](#querying-the-collection).
+  **query** prefix.
 
-## Querying the collection
+### Querying the collection
 
-Other apps that query Qdrant directly must embed the query with the same
-model, through the same server, and with the same query prefix that matches
-the document prefix used at ingest time:
+Apps that query Qdrant directly must embed the query with the same model,
+through the same server, with the query prefix:
 
 ```python
 import httpx
@@ -98,128 +155,83 @@ resp = httpx.post(
 )
 vector = resp.json()["data"][0]["embedding"]
 
-hits = QdrantClient(url="http://localhost:6333").query_points(
-    collection_name="calibre_books", query=vector, limit=5
-).points
+hits = (
+    QdrantClient(url="http://localhost:6333")
+    .query_points(collection_name="calibre_books", query=vector, limit=5)
+    .points
+)
 for hit in hits:
     print(hit.score, hit.payload["title"], hit.payload["chunk_type"])
 ```
 
-From Python inside this project you can use the configured embedder instead,
-which adds the prefix for you:
+From Python with this package installed, the configured embedder adds the
+prefix for you:
 
 ```python
-from calibre_web2rag.config import load_settings
+from calibre_web2rag.config import Settings
 from calibre_web2rag.embeddings import build_embedder
 
-vector = build_embedder(load_settings()).encode(
+vector = build_embedder(Settings.from_env()).encode(
     ["books about orbital mechanics"], kind="query"
 )[0]
 ```
 
-## Run locally
+### With pip
+
+Needs Python 3.15 or newer. Install into a virtual environment, from a
+release's wheel:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-cp .env.example .env
+python3 -m venv ~/.venvs/calibre-web2rag
+~/.venvs/calibre-web2rag/bin/pip install https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/releases/download/vX.Y.Z/calibre_web2rag-X.Y.Z-py3-none-any.whl
+~/.venvs/calibre-web2rag/bin/calibre-web2rag --version
+```
+
+For local sentence-transformers embeddings instead, install the
+extra (`pip install "calibre-web2rag[sentence-transformers] @ <wheel URL>"`)
+and set `EMBEDDING_PROVIDER=sentence_transformers`. Set the environment
+variables yourself, or put them in a `.env` in the directory you run it
+from.
+
+## Development
+
+With Docker, nothing else to install:
+
+```bash
+cp .env.example .env                                       # then edit it
+docker compose up --build                                  # run from the working tree, with Qdrant
+docker compose -f docker-compose.test.yaml run --rm test   # tests with coverage
+docker compose -f docker-compose.lint.yaml run --rm lint   # every lint check, as CI runs them
+```
+
+With [uv](https://docs.astral.sh/uv/), which installs the exact versions
+CI tests (`uv.lock`):
+
+```bash
+uv sync
+uv run pytest
+uv run mypy
+uv run calibre-web2rag
+```
+
+With pip (25.1 or newer, for `--group`). pip doesn't read `uv.lock`, so it
+may pick newer dependency versions than CI tested:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e . --group dev
+pytest
+mypy
 calibre-web2rag
 ```
 
-## Run with Docker Compose
+Either way, `uvx pre-commit install` (or `pip install pre-commit &&
+pre-commit install`) runs the lint checks on every commit.
 
-```bash
-cp .env.example .env
-docker compose up --build ingester
-```
+Releases: run the **Release** workflow from the Actions tab, pick the bump,
+and merge the release PR it opens; see `CHANGELOG.md`.
 
-This starts `qdrant` and then the `ingester` service.
+## License
 
-Inside the container, `localhost` is the container itself. Point
-`OPENAI_BASE_URL` at your embedding server's reachable address (for example
-`http://host.docker.internal:8080/v1` or a compose service name).
-
-### Build size and speed
-
-The image keeps runtime libraries installed, including `sentence-transformers`.
-To keep builds predictable while avoiding repeated model downloads, use the Hugging Face cache mount (`HF_CACHE_HOST_DIR` -> `HF_CACHE_DIR`).
-
-### Hugging Face model cache
-
-If you use `sentence_transformers`, model downloads are cacheable and reusable:
-
-- Local runs: set `HF_CACHE_DIR` (or `HF_HOME` / `TRANSFORMERS_CACHE` / `SENTENCE_TRANSFORMERS_HOME`).
-- Docker runs: `docker-compose.yml` maps `HF_CACHE_HOST_DIR` on the host to `HF_CACHE_DIR` in the container.
-
-Example:
-
-```bash
-HF_CACHE_HOST_DIR=~/.cache/huggingface
-HF_CACHE_DIR=/hf-cache
-```
-
-## Run with Ollama embeddings (GPU-friendly)
-
-Ollama exposes an OpenAI-compatible API at `/v1`, so it is used through the
-`openai` provider. For higher embedding throughput, run a local Ollama with:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.ollama.yml up --build ingester
-```
-
-The override sets:
-
-- `EMBEDDING_PROVIDER=openai`
-- `OPENAI_BASE_URL=http://ollama:11434/v1`
-- `EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}`
-- `VECTOR_SIZE=${OLLAMA_VECTOR_SIZE:-768}`
-
-Set `OLLAMA_EMBEDDING_MODEL` / `OLLAMA_VECTOR_SIZE` to use a different Ollama
-model; they override `EMBEDDING_MODEL` / `VECTOR_SIZE` from `.env` for this
-compose setup only. `nomic-embed-text` uses the same `search_query: ` /
-`search_document: ` prefixes as the ModernBERT defaults in `.env.example`; change
-`EMBEDDING_QUERY_PREFIX` / `EMBEDDING_DOCUMENT_PREFIX` if you pick another model.
-
-Notes:
-
-- No `OPENAI_API_KEY` is needed for a local Ollama.
-- The Ollama override includes a model pull helper service.
-- GPU passthrough configuration is primarily for Linux + NVIDIA Docker setups.
-- Ensure `VECTOR_SIZE` matches your embedding model dimension.
-
-## Run tests locally
-
-```bash
-pip install -e .[dev]
-pytest -q
-```
-
-## Run tests with test compose file
-
-```bash
-cp .env.example .env
-docker compose -f docker-compose.test.yml up --build --abort-on-container-exit tests
-```
-
-## Semantic versioning and tags
-
-- Version follows semver.
-- Tag release commits with `vX.Y.Z`.
-
-Example:
-
-```bash
-git commit -m "release: v0.1.0"
-scripts/tag-release.sh 0.1.0
-git push origin main --tags
-```
-
-## Docker image publishing on GitHub
-
-GitHub Actions workflow at `.github/workflows/docker-publish.yml`:
-
-- On push to `main`: builds and publishes `ghcr.io/<owner>/<repo>:latest`.
-- On semver tag push (for example `v1.2.3`): also publishes version tags.
-
-The `latest` tag is always updated from `main`.
+[MIT](LICENSE)

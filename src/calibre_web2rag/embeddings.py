@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import httpx
 
@@ -22,10 +22,7 @@ EmbedKind = Literal["query", "document"]
 
 
 class Embedder(Protocol):
-    def encode(
-        self, chunks: list[str], kind: EmbedKind = "document"
-    ) -> list[list[float]]:
-        ...
+    def encode(self, chunks: list[str], kind: EmbedKind = "document") -> list[list[float]]: ...
 
 
 def _truncate(texts: list[str], max_tokens: int, prefix: str = "") -> list[str]:
@@ -41,8 +38,7 @@ def _truncate(texts: list[str], max_tokens: int, prefix: str = "") -> list[str]:
     for text in texts:
         if len(text) > max_chars:
             logger.warning(
-                "Truncating text from %d to %d chars "
-                "(~%d token limit incl. %d-char prefix)",
+                "Truncating text from %d to %d chars (~%d token limit incl. %d-char prefix)",
                 len(text),
                 max_chars,
                 max_tokens,
@@ -66,7 +62,8 @@ class _Prefixes:
         raise ValueError(f"Unknown embedding kind {kind!r}; use 'query' or 'document'")
 
 
-def _load_sentence_transformer():
+# Any: sentence-transformers is an optional extra, so it can't be typed here.
+def _load_sentence_transformer() -> Any:
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError:
@@ -88,9 +85,7 @@ class SentenceTransformerEmbedder:
         cls = _load_sentence_transformer()
         self._model = cls(self.model_name, cache_folder=self.cache_dir)
 
-    def encode(
-        self, chunks: list[str], kind: EmbedKind = "document"
-    ) -> list[list[float]]:
+    def encode(self, chunks: list[str], kind: EmbedKind = "document") -> list[list[float]]:
         chunks = _truncate(chunks, self.max_tokens, self.prefixes.for_kind(kind))
         vectors = self._model.encode(chunks, show_progress_bar=False)
         return [v.tolist() if hasattr(v, "tolist") else list(v) for v in vectors]
@@ -114,20 +109,14 @@ class OpenAIEmbedder:
     prefixes: _Prefixes = field(default_factory=_Prefixes)
 
     def __post_init__(self) -> None:
-        headers = (
-            {"Authorization": f"Bearer {self.api_key}"}
-            if self.api_key
-            else None
-        )
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
         self._client = httpx.Client(
             base_url=self.base_url.rstrip("/"),
             headers=headers,
             timeout=self.timeout_seconds,
         )
 
-    def encode(
-        self, chunks: list[str], kind: EmbedKind = "document"
-    ) -> list[list[float]]:
+    def encode(self, chunks: list[str], kind: EmbedKind = "document") -> list[list[float]]:
         prefix = self.prefixes.for_kind(kind)
         if not chunks:
             return []
@@ -138,7 +127,8 @@ class OpenAIEmbedder:
         return vectors
 
     def _embed_batch(self, chunks: list[str]) -> list[list[float]]:
-        payload: dict = {
+        # Any: the request body is JSON with mixed value types.
+        payload: dict[str, Any] = {
             "model": self.model_name,
             "input": chunks,
             "encoding_format": "float",
@@ -149,9 +139,7 @@ class OpenAIEmbedder:
         response.raise_for_status()
         data = response.json().get("data")
         if not isinstance(data, list) or len(data) != len(chunks):
-            raise ValueError(
-                "OpenAI /embeddings response missing 'data' or wrong length"
-            )
+            raise ValueError("OpenAI /embeddings response missing 'data' or wrong length")
         ordered = sorted(data, key=lambda item: item.get("index", 0))
         return [item["embedding"] for item in ordered]
 
@@ -179,9 +167,7 @@ def _request_batches(
     current_tokens = 0
     for text in texts:
         tokens = _estimate_tokens(text)
-        if current and (
-            len(current) >= max_inputs or current_tokens + tokens > max_tokens
-        ):
+        if current and (len(current) >= max_inputs or current_tokens + tokens > max_tokens):
             batches.append(current)
             current, current_tokens = [], 0
         current.append(text)
