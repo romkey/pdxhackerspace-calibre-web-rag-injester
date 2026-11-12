@@ -28,6 +28,8 @@ class Settings:
     vector_size: int
     embedding_context_length: int
     embedding_dimensions: int | None = None
+    embedding_query_prefix: str = ""
+    embedding_document_prefix: str = ""
 
 
 def _get_required(name: str) -> str:
@@ -48,22 +50,24 @@ def load_settings() -> Settings:
         qdrant_api_key=os.getenv("QDRANT_API_KEY"),
         qdrant_collection=os.getenv("QDRANT_COLLECTION", "calibre_books"),
         embedding_provider=os.getenv("EMBEDDING_PROVIDER", "openai").lower(),
-        embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
+        embedding_model=os.getenv("EMBEDDING_MODEL", "nomic-ai/modernbert-embed-base"),
         hf_cache_dir=(
             os.getenv("HF_CACHE_DIR")
             or os.getenv("SENTENCE_TRANSFORMERS_HOME")
             or os.getenv("HF_HOME")
         ),
-        openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        openai_base_url=os.getenv("OPENAI_BASE_URL", "http://localhost:8080/v1"),
         openai_api_key=os.getenv("OPENAI_API_KEY") or None,
         openai_timeout_seconds=int(os.getenv("OPENAI_TIMEOUT_SECONDS", "120")),
         chunk_size=int(os.getenv("CHUNK_SIZE", "1200")),
         chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "120")),
         batch_size=int(os.getenv("BATCH_SIZE", "64")),
         distance=os.getenv("QDRANT_DISTANCE", "cosine").lower(),
-        vector_size=int(os.getenv("VECTOR_SIZE", "1536")),
+        vector_size=int(os.getenv("VECTOR_SIZE", "768")),
         embedding_context_length=int(
             os.getenv("EMBEDDING_CONTEXT_LENGTH", "8192")
         ),
         embedding_dimensions=int(os.getenv("EMBEDDING_DIMENSIONS") or 0) or None,
+        embedding_query_prefix=os.getenv("EMBEDDING_QUERY_PREFIX", ""),
+        embedding_document_prefix=os.getenv("EMBEDDING_DOCUMENT_PREFIX", ""),
     )
