@@ -14,8 +14,9 @@ Qdrant (HTTP), and Ollama (HTTP) or a local sentence-transformers model.
 2. Per book: one `book_metadata` point, `description` points from the
    Calibre comments, and `content` points from each file's extracted text.
 3. One `library_summary` set of points for catalog-wide questions.
-4. Points are embedded in batches and upserted; SIGTERM stops after the
-   batch in flight.
+4. Points are embedded in batches and upserted. On SIGTERM it finishes
+   the file being read, upserts what it has, and exits; re-running
+   completes the rest.
 
 ## Files
 

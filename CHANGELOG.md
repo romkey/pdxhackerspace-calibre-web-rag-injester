@@ -31,7 +31,7 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - `--version`, and clean shutdown on SIGTERM (`docker stop`): the ingester
-  finishes the batch in flight and exits.
+  finishes the file being read, upserts what it has and exits.
 - `LOG_LEVEL` setting.
 - CI (tests with coverage, a pip install of the built wheel, and the
   production image) and Lint (ruff, mypy strict, yamllint, actionlint,

@@ -39,7 +39,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         stream=sys.stdout,
     )
 
-    # `docker stop` sends SIGTERM: finish the batch in flight, then stop.
+    # `docker stop` sends SIGTERM: finish the file being read, upsert, then stop.
     stop = threading.Event()
 
     def on_sigterm(signum: int, frame: FrameType | None) -> None:

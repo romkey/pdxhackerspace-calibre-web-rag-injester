@@ -45,7 +45,7 @@ empty value (`NAME=`) counts as unset.
 |----------|---------|---------|
 | `CHUNK_SIZE` | `1200` | Target chunk length in characters, ≥ 1. Chunks break at sentence boundaries. |
 | `CHUNK_OVERLAP` | `120` | Characters of trailing sentences repeated at the start of the next chunk, ≥ 0 and < `CHUNK_SIZE`. |
-| `BATCH_SIZE` | `64` | Points per Qdrant upsert, ≥ 1. On SIGTERM the ingester stops after the batch in flight. |
+| `BATCH_SIZE` | `64` | Points per Qdrant upsert, ≥ 1. |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`. |
 
 ## Compose and tooling (not read by the app)

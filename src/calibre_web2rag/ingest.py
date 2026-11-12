@@ -220,7 +220,8 @@ def _build_library_summary_points(
 def ingest(settings: Settings, *, stop: threading.Event | None = None) -> int:
     """Ingest the whole library; returns the number of points upserted.
 
-    If ``stop`` is set (e.g. on SIGTERM), returns after the batch in flight.
+    If ``stop`` is set (e.g. on SIGTERM), finishes the file being read,
+    upserts the points it already has, and returns.
     """
     repo = CalibreRepository(settings.calibre_metadata_db, settings.calibre_library_root)
     embedder = build_embedder(settings)
@@ -233,14 +234,15 @@ def ingest(settings: Settings, *, stop: threading.Event | None = None) -> int:
     )
 
     inserted = 0
-    for batch in _generate_points(repo=repo, embedder=embedder, settings=settings):
+    for batch in _generate_points(repo=repo, embedder=embedder, settings=settings, stop=stop):
         store.upsert(batch)
         inserted += len(batch)
         logger.info("Upserted %s chunks to Qdrant (total=%s)", len(batch), inserted)
-        if stop is not None and stop.is_set():
-            logger.info("Stopping early as requested")
-            break
     return inserted
+
+
+def _stopping(stop: threading.Event | None) -> bool:
+    return stop is not None and stop.is_set()
 
 
 def _generate_points(
@@ -248,13 +250,18 @@ def _generate_points(
     repo: BookSource,
     embedder: Embedder,
     settings: Settings,
+    stop: threading.Event | None = None,
 ) -> Iterator[list[PointStruct]]:
+    # On stop, the points already built are still yielded, then it returns.
     batch: list[PointStruct] = []
     books = repo.fetch_books()
 
     for book in books:
+        if _stopping(stop):
+            logger.info("Stopping early as requested")
+            break
         try:
-            new_points = _process_book(book=book, embedder=embedder, settings=settings)
+            new_points = _process_book(book=book, embedder=embedder, settings=settings, stop=stop)
             for point in new_points:
                 batch.append(point)
                 if len(batch) >= settings.batch_size:
@@ -269,7 +276,7 @@ def _generate_points(
             continue
 
     # Library-wide catalog summary
-    if books:
+    if books and not _stopping(stop):
         for point in _build_library_summary_points(
             books=books, embedder=embedder, settings=settings
         ):
@@ -287,6 +294,7 @@ def _process_book(
     book: BookRecord,
     embedder: Embedder,
     settings: Settings,
+    stop: threading.Event | None = None,
 ) -> list[PointStruct]:
     points: list[PointStruct] = []
     logger.info(
@@ -350,6 +358,9 @@ def _process_book(
 
     # Index content from each file
     for file in book.files:
+        if _stopping(stop):
+            # Partial books are fine: point IDs are stable, a re-run completes it.
+            break
         file_path = str(file.file_path)
         logger.info(
             "Reading file for book id=%s format=%s path=%s",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import threading
 import uuid
 from collections.abc import Callable, Iterable
@@ -219,7 +220,7 @@ def test_ingest_wires_components(
     }
 
 
-def test_ingest_stops_after_current_batch(
+def test_ingest_stopped_before_start_upserts_nothing(
     monkeypatch: pytest.MonkeyPatch, make_settings: SettingsFactory, make_book: BookFactory
 ) -> None:
     settings = make_settings(batch_size=2)
@@ -227,8 +228,39 @@ def test_ingest_stops_after_current_batch(
     stop = threading.Event()
     stop.set()
 
-    assert ingest_mod.ingest(settings, stop=stop) == 2
-    assert _Store.upserts == [2]
+    assert ingest_mod.ingest(settings, stop=stop) == 0
+    assert _Store.upserts == []
+
+
+def test_ingest_stop_mid_book_upserts_what_it_has(
+    monkeypatch: pytest.MonkeyPatch,
+    make_settings: SettingsFactory,
+    make_book: BookFactory,
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(batch_size=1000)
+    first = make_book(1)
+    second_file = CalibreFile(
+        format="EPUB", file_path=tmp_path / "book1.epub", file_name="Title", size_bytes=4
+    )
+    first = dataclasses.replace(first, files=[*first.files, second_file])
+    _wire_fakes(monkeypatch, settings, [first, make_book(2)])
+    stop = threading.Event()
+    read: list[str] = []
+
+    def _extract(fmt: str, path: str) -> list[TextSection]:
+        # SIGTERM arrives while the first file is being read.
+        read.append(fmt)
+        stop.set()
+        return [TextSection(title=None, text="Some content. " * 20)]
+
+    monkeypatch.setattr(ingest_mod, "_safe_extract_sections", _extract)
+
+    total = ingest_mod.ingest(settings, stop=stop)
+    # Only the first file of the first book: no second file, book or summary.
+    assert read == ["PDF"]
+    assert total > 1
+    assert _Store.upserts == [total]
 
 
 def test_links_return_none_without_config() -> None:

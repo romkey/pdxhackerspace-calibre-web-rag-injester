@@ -72,9 +72,9 @@ calibre-web2rag            # ingest, configured by environment variables
 calibre-web2rag --version
 ```
 
-Exit codes: 0 on success (including a clean stop on SIGTERM, which ends
-after the batch in flight), 1 if ingestion fails, 2 for invalid
-configuration.
+Exit codes: 0 on success (including a clean stop on SIGTERM, which
+finishes the file being read, upserts the points it has and exits), 1 if
+ingestion fails, 2 for invalid configuration.
 
 ## Running it
 
