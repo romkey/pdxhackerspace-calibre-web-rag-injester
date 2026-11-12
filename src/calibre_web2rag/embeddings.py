@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 _CHARS_PER_TOKEN = 4
 
+# OpenAI rejects /embeddings requests with more than 2048 inputs or more than
+# 300k tokens in total. Stay well under both.
+_OPENAI_MAX_INPUTS_PER_REQUEST = 2048
+_OPENAI_MAX_TOKENS_PER_REQUEST = 250_000
+
 
 class Embedder(Protocol):
     def encode(self, chunks: list[str]) -> list[list[float]]:
@@ -98,6 +103,12 @@ class OpenAIEmbedder:
         if not chunks:
             return []
         chunks = _truncate(chunks, self.max_tokens)
+        vectors: list[list[float]] = []
+        for batch in _request_batches(chunks):
+            vectors.extend(self._embed_batch(batch))
+        return vectors
+
+    def _embed_batch(self, chunks: list[str]) -> list[list[float]]:
         payload: dict = {
             "model": self.model_name,
             "input": chunks,
@@ -114,6 +125,31 @@ class OpenAIEmbedder:
             )
         ordered = sorted(data, key=lambda item: item.get("index", 0))
         return [item["embedding"] for item in ordered]
+
+
+def _request_batches(
+    texts: list[str],
+    max_inputs: int | None = None,
+    max_tokens: int | None = None,
+) -> list[list[str]]:
+    """Split texts into request-sized batches under the API's input/token caps."""
+    max_inputs = max_inputs or _OPENAI_MAX_INPUTS_PER_REQUEST
+    max_tokens = max_tokens or _OPENAI_MAX_TOKENS_PER_REQUEST
+    batches: list[list[str]] = []
+    current: list[str] = []
+    current_tokens = 0
+    for text in texts:
+        tokens = len(text) // _CHARS_PER_TOKEN + 1
+        if current and (
+            len(current) >= max_inputs or current_tokens + tokens > max_tokens
+        ):
+            batches.append(current)
+            current, current_tokens = [], 0
+        current.append(text)
+        current_tokens += tokens
+    if current:
+        batches.append(current)
+    return batches
 
 
 def build_embedder(settings: Settings) -> Embedder:

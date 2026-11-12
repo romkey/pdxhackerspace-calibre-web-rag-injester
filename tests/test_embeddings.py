@@ -4,6 +4,7 @@ from calibre_web2rag.config import Settings
 from calibre_web2rag.embeddings import (
     OpenAIEmbedder,
     SentenceTransformerEmbedder,
+    _request_batches,
     _truncate,
     build_embedder,
 )
@@ -196,3 +197,50 @@ def test_truncate_noop_when_disabled() -> None:
     long_text = "x" * 100
     result = _truncate([long_text], max_tokens=0)
     assert result[0] == long_text
+
+
+def test_request_batches_respects_input_cap() -> None:
+    batches = _request_batches(["a"] * 5, max_inputs=2, max_tokens=10_000)
+    assert [len(b) for b in batches] == [2, 2, 1]
+
+
+def test_request_batches_respects_token_cap() -> None:
+    text = "x" * 40  # ~11 estimated tokens each
+    batches = _request_batches([text] * 4, max_inputs=100, max_tokens=25)
+    assert [len(b) for b in batches] == [2, 2]
+
+
+def test_openai_embedder_splits_large_inputs(monkeypatch) -> None:
+    calls: list[int] = []
+
+    class _EchoClient(_FakeClient):
+        def post(self, path: str, json: dict):  # noqa: A002, ARG002
+            n = len(json["input"])
+            calls.append(n)
+
+            class _R:
+                def raise_for_status(self) -> None:
+                    return None
+
+                def json(self) -> dict:
+                    return {
+                        "data": [
+                            {"index": i, "embedding": [float(i)]} for i in range(n)
+                        ]
+                    }
+
+            return _R()
+
+    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _EchoClient)
+    monkeypatch.setattr(
+        "calibre_web2rag.embeddings._OPENAI_MAX_INPUTS_PER_REQUEST", 3
+    )
+    embedder = OpenAIEmbedder(
+        model_name="text-embedding-3-small",
+        base_url="https://api.openai.com/v1",
+        api_key=None,
+        timeout_seconds=30,
+    )
+    vectors = embedder.encode(["t"] * 7)
+    assert len(vectors) == 7
+    assert calls == [3, 3, 1]
