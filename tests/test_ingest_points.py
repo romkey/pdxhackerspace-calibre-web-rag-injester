@@ -19,7 +19,11 @@ class _Repo:
 
 
 class _Embedder:
-    def encode(self, chunks: list[str], show_progress_bar: bool = False) -> list[list[float]]:  # noqa: ARG002
+    def __init__(self) -> None:
+        self.kinds: list[str] = []
+
+    def encode(self, chunks: list[str], kind: str = "document") -> list[list[float]]:
+        self.kinds.append(kind)
         return [[0.1, 0.2, 0.3] for _ in chunks]
 
 
@@ -136,9 +140,12 @@ def test_description_chunks_indexed(monkeypatch, tmp_path: Path) -> None:
 
     settings = _make_settings(tmp_path, chunk_size=200, chunk_overlap=20)
 
+    embedder = _Embedder()
     points = _collect_points(
-        _generate_points(repo=_Repo([book]), embedder=_Embedder(), settings=settings)
+        _generate_points(repo=_Repo([book]), embedder=embedder, settings=settings)
     )
+    # Ingestion embeds everything (metadata, description, summary) as documents.
+    assert embedder.kinds and set(embedder.kinds) == {"document"}
     desc = _by_type(points, "description")
     assert len(desc) == 1
     payload = desc[0].payload

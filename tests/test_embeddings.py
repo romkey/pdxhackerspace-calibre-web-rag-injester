@@ -5,6 +5,7 @@ from calibre_web2rag.embeddings import (
     OpenAIEmbedder,
     SentenceTransformerEmbedder,
     _estimate_tokens,
+    _Prefixes,
     _request_batches,
     _truncate,
     build_embedder,
@@ -256,3 +257,97 @@ def test_request_batches_splits_cjk_text() -> None:
     cjk = "漢" * 100  # ~101 estimated tokens each, not ~26
     batches = _request_batches([cjk] * 4, max_inputs=100, max_tokens=250)
     assert [len(b) for b in batches] == [2, 2]
+
+
+def test_truncate_prepends_prefix_and_counts_it() -> None:
+    result = _truncate(["x" * 100], max_tokens=10, prefix="doc: ")
+    assert result[0].startswith("doc: ")
+    assert len(result[0]) == 10 * 4  # prefix + text fits the budget
+
+
+def test_truncate_prefix_without_limit() -> None:
+    assert _truncate(["abc"], max_tokens=0, prefix="q: ") == ["q: abc"]
+
+
+def test_openai_embedder_applies_query_and_document_prefixes(monkeypatch) -> None:
+    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
+    embedder = OpenAIEmbedder(
+        model_name="text-embedding-3-small",
+        base_url="http://localhost:8080/v1",
+        api_key=None,
+        timeout_seconds=30,
+        prefixes=_Prefixes(
+            query_prefix="search_query: ", document_prefix="search_document: "
+        ),
+    )
+    embedder.encode(["a", "b"])
+    assert _FakeClient.last_json["input"] == ["search_document: a", "search_document: b"]
+    embedder.encode(["a", "b"], kind="query")
+    assert _FakeClient.last_json["input"] == ["search_query: a", "search_query: b"]
+
+
+def test_openai_embedder_no_prefix_by_default(monkeypatch) -> None:
+    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
+    embedder = OpenAIEmbedder(
+        model_name="text-embedding-3-small",
+        base_url="http://localhost:8080/v1",
+        api_key=None,
+        timeout_seconds=30,
+    )
+    embedder.encode(["a", "b"], kind="query")
+    assert _FakeClient.last_json["input"] == ["a", "b"]
+
+
+def test_embedder_rejects_unknown_kind(monkeypatch) -> None:
+    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
+    embedder = OpenAIEmbedder(
+        model_name="text-embedding-3-small",
+        base_url="http://localhost:8080/v1",
+        api_key=None,
+        timeout_seconds=30,
+    )
+    with pytest.raises(ValueError):
+        embedder.encode(["a"], kind="passage")  # type: ignore[arg-type]
+
+
+def test_build_embedder_passes_prefixes_from_settings(monkeypatch) -> None:
+    monkeypatch.setattr("calibre_web2rag.embeddings.httpx.Client", _FakeClient)
+    settings = Settings(
+        calibre_metadata_db="db.sqlite",
+        calibre_library_root="/tmp",
+        calibre_web_base_url=None,
+        calibre_download_url_template=None,
+        qdrant_url="http://qdrant:6333",
+        qdrant_api_key=None,
+        qdrant_collection="books",
+        embedding_provider="openai",
+        embedding_model="nomic-ai/modernbert-embed-base",
+        hf_cache_dir=None,
+        openai_base_url="http://localhost:8080/v1",
+        openai_api_key=None,
+        openai_timeout_seconds=30,
+        chunk_size=1000,
+        chunk_overlap=100,
+        batch_size=10,
+        distance="cosine",
+        vector_size=768,
+        embedding_context_length=8192,
+        embedding_query_prefix="search_query: ",
+        embedding_document_prefix="search_document: ",
+    )
+    embedder = build_embedder(settings)
+    assert embedder.prefixes.for_kind("query") == "search_query: "
+    assert embedder.prefixes.for_kind("document") == "search_document: "
+
+
+def test_load_settings_reads_prefixes(monkeypatch) -> None:
+    from calibre_web2rag.config import load_settings
+
+    monkeypatch.setattr("calibre_web2rag.config.load_dotenv", lambda: None)
+    monkeypatch.setenv("CALIBRE_METADATA_DB", "db.sqlite")
+    monkeypatch.setenv("CALIBRE_LIBRARY_ROOT", "/tmp")
+    monkeypatch.setenv("EMBEDDING_QUERY_PREFIX", "query: ")
+    monkeypatch.setenv("EMBEDDING_DOCUMENT_PREFIX", "passage: ")
+    settings = load_settings()
+    assert settings.embedding_query_prefix == "query: "
+    assert settings.embedding_document_prefix == "passage: "
