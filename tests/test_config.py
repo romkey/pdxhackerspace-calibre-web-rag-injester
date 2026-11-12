@@ -47,7 +47,7 @@ def test_overrides() -> None:
             "VECTOR_SIZE": "384",
             "EMBEDDING_CONTEXT_LENGTH": "0",
             "OPENAI_API_KEY": "dummy-key",
-            "EMBEDDING_DIMENSIONS": "384",
+            "EMBEDDING_DIMENSIONS": "384",  # matches VECTOR_SIZE
             "EMBEDDING_QUERY_PREFIX": "query: ",
             "EMBEDDING_DOCUMENT_PREFIX": "passage: ",
             "LOG_LEVEL": "debug",
@@ -102,6 +102,11 @@ def test_required_variables(missing: str) -> None:
         ("VECTOR_SIZE", "1.5", "VECTOR_SIZE must be a whole number"),
         ("OPENAI_TIMEOUT_SECONDS", "0", "OPENAI_TIMEOUT_SECONDS must be at least 1"),
         ("EMBEDDING_DIMENSIONS", "-1", "EMBEDDING_DIMENSIONS must be at least 0"),
+        (
+            "EMBEDDING_DIMENSIONS",
+            "512",
+            r"EMBEDDING_DIMENSIONS \(512\) must equal VECTOR_SIZE \(768\)",
+        ),
         ("EMBEDDING_PROVIDER", "ollama", "EMBEDDING_PROVIDER must be one of"),
         ("CHUNK_OVERLAP", "1200", "CHUNK_OVERLAP .* must be smaller than CHUNK_SIZE"),
         ("QDRANT_DISTANCE", "manhattan", "QDRANT_DISTANCE must be one of"),

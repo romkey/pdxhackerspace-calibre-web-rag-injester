@@ -34,7 +34,7 @@ empty value (`NAME=`) counts as unset.
 | `OPENAI_BASE_URL` | `http://localhost:8080/v1` | Embeddings API base URL; requests go to `<base>/embeddings`. OpenAI: `https://api.openai.com/v1`; Ollama: `http://ollama:11434/v1`. In a container, `localhost` is the container itself: use the server's reachable address, e.g. `http://host.docker.internal:8080/v1`. |
 | `OPENAI_API_KEY` | unset | Sent as `Authorization: Bearer …`. Not needed for an unauthenticated self-hosted server. |
 | `OPENAI_TIMEOUT_SECONDS` | `120` | Timeout for each embedding request, ≥ 1. |
-| `EMBEDDING_DIMENSIONS` | unset | Ask for shorter vectors (`text-embedding-3-*` only), ≥ 0; `0` or unset means the model's full size. Must equal `VECTOR_SIZE` when set. |
+| `EMBEDDING_DIMENSIONS` | unset | Ask for shorter vectors (`text-embedding-3-*` only), ≥ 0; `0` or unset means the model's full size. Must equal `VECTOR_SIZE` when set, or startup fails. |
 | `EMBEDDING_QUERY_PREFIX` | empty | Prefix for search queries (see below). Kept exactly, spaces included. The ingester embeds only documents; this is used by `build_embedder(settings).encode(texts, kind="query")`. |
 | `EMBEDDING_DOCUMENT_PREFIX` | empty | Prefix added to everything the ingester embeds (see below). Changing it changes every vector: re-run the ingester. |
 | `EMBEDDING_CONTEXT_LENGTH` | `8192` | Model context in tokens. Texts longer than about 4 characters per token are truncated before embedding. `0` disables truncation. |

@@ -81,6 +81,15 @@ class Settings:
                 f"CHUNK_OVERLAP ({chunk_overlap}) must be smaller than CHUNK_SIZE ({chunk_size})"
             )
 
+        vector_size = integer("VECTOR_SIZE", 768, 1)
+        # 0 or unset: the model's full size.
+        embedding_dimensions = integer("EMBEDDING_DIMENSIONS", 0, 0) or None
+        if embedding_dimensions is not None and embedding_dimensions != vector_size:
+            raise ConfigError(
+                f"EMBEDDING_DIMENSIONS ({embedding_dimensions}) must equal "
+                f"VECTOR_SIZE ({vector_size})"
+            )
+
         log_level = (env.get("LOG_LEVEL") or "INFO").upper()
         if log_level not in logging.getLevelNamesMapping():
             raise ConfigError(f"LOG_LEVEL {log_level!r} is not a logging level")
@@ -107,11 +116,10 @@ class Settings:
             chunk_overlap=chunk_overlap,
             batch_size=integer("BATCH_SIZE", 64, 1),
             distance=choice("QDRANT_DISTANCE", "cosine", DISTANCES),
-            vector_size=integer("VECTOR_SIZE", 768, 1),
+            vector_size=vector_size,
             # 0 disables truncation.
             embedding_context_length=integer("EMBEDDING_CONTEXT_LENGTH", 8192, 0),
-            # 0 or unset: the model's full size.
-            embedding_dimensions=integer("EMBEDDING_DIMENSIONS", 0, 0) or None,
+            embedding_dimensions=embedding_dimensions,
             # Kept exactly as given: the trailing space usually matters.
             embedding_query_prefix=env.get("EMBEDDING_QUERY_PREFIX", ""),
             embedding_document_prefix=env.get("EMBEDDING_DOCUMENT_PREFIX", ""),
