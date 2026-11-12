@@ -33,7 +33,11 @@ services:
       - ${CALIBRE_LIBRARY_ROOT:-/data/calibre}:${CALIBRE_LIBRARY_ROOT:-/data/calibre}:ro
       - ${HF_CACHE_HOST_DIR:-./.cache/huggingface}:${HF_CACHE_DIR:-/hf-cache}
     depends_on:
-      - qdrant
+      qdrant:
+        condition: service_started
+    # On SIGTERM it finishes the file it is embedding (requests can take up
+    # to OPENAI_TIMEOUT_SECONDS each) and upserts; don't SIGKILL it at 10s.
+    stop_grace_period: 5m
 
   qdrant:
     image: qdrant/qdrant:v1.20.0

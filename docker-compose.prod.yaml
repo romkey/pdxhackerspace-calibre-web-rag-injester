@@ -18,6 +18,9 @@ services:
       context: .
       target: production
     restart: "no"
+    # On SIGTERM it finishes the file it is embedding (requests can take up
+    # to OPENAI_TIMEOUT_SECONDS each) and upserts; don't SIGKILL it at 10s.
+    stop_grace_period: 5m
     env_file:
       - path: .env
         required: false
