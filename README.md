@@ -9,7 +9,9 @@
 collection for retrieval-augmented generation (RAG). It reads book metadata
 straight from Calibre's `metadata.db`, extracts the text of DRM-free PDF,
 EPUB and MOBI files, splits it into overlapping sentence-aware chunks,
-embeds them with Ollama or sentence-transformers, and upserts them with rich
+embeds them through the OpenAI embeddings API (OpenAI itself, or a
+compatible server such as Ollama, vLLM or LM Studio) or with local
+sentence-transformers, and upserts them with rich
 payloads (authors, tags, series, identifiers, chapter titles, and links
 back to Calibre Web), so an LLM can answer both "what does this book say
 about X?" and "which books do I have by Y?".
@@ -26,7 +28,7 @@ about X?" and "which books do I have by Y?".
 | `src/calibre_web2rag/calibre_db.py` | Reads books and their files from Calibre's SQLite database |
 | `src/calibre_web2rag/extractors.py` | DRM checks and text extraction for PDF, EPUB and MOBI |
 | `src/calibre_web2rag/chunking.py` | Sentence-aware chunking with overlap |
-| `src/calibre_web2rag/embeddings.py` | Ollama and sentence-transformers embedders |
+| `src/calibre_web2rag/embeddings.py` | OpenAI-API and sentence-transformers embedders |
 | `src/calibre_web2rag/ingest.py` | Builds points and payloads and drives the run |
 | `src/calibre_web2rag/qdrant_store.py` | Creates the collection and payload indexes, upserts points |
 | `src/calibre_web2rag/links.py` | Calibre Web download and OPDS links |
@@ -95,16 +97,20 @@ release. To ingest again:
 docker compose -f docker-compose.prod.yaml run --rm app
 ```
 
-The default embedding provider is Ollama at `http://ollama:11434`. To run
-Ollama alongside it on an NVIDIA GPU (Linux with the NVIDIA container
-toolkit), add the override file; it pulls `EMBEDDING_MODEL` first:
+By default it embeds with OpenAI's `text-embedding-3-small`; set
+`OPENAI_API_KEY`. For another OpenAI-compatible server, set
+`OPENAI_BASE_URL` (and `EMBEDDING_MODEL`). Make sure `VECTOR_SIZE` matches
+the model's dimension (`text-embedding-3-small`: 1536).
+
+To embed locally with Ollama on an NVIDIA GPU instead (Linux with the
+NVIDIA container toolkit), add the override file. It runs Ollama, pulls
+`OLLAMA_EMBEDDING_MODEL` (default `nomic-embed-text`, 768 dimensions; set
+`OLLAMA_VECTOR_SIZE` for another model), and points the ingester at
+Ollama's OpenAI-compatible API; no API key is needed:
 
 ```bash
 docker compose -f docker-compose.prod.yaml -f docker-compose.ollama.yaml up -d
 ```
-
-Make sure `VECTOR_SIZE` matches your embedding model's dimension
-(`nomic-embed-text`: 768).
 
 ### With pip
 
@@ -117,7 +123,7 @@ python3 -m venv ~/.venvs/calibre-web2rag
 ~/.venvs/calibre-web2rag/bin/calibre-web2rag --version
 ```
 
-For local sentence-transformers embeddings instead of Ollama, install the
+For local sentence-transformers embeddings instead, install the
 extra (`pip install "calibre-web2rag[sentence-transformers] @ <wheel URL>"`)
 and set `EMBEDDING_PROVIDER=sentence_transformers`. Set the environment
 variables yourself, or put them in a `.env` in the directory you run it

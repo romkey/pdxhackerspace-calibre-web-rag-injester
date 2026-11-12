@@ -23,17 +23,18 @@ empty value (`NAME=`) counts as unset.
 | `QDRANT_API_KEY` | unset | Qdrant API key, if your Qdrant requires one. |
 | `QDRANT_COLLECTION` | `calibre_books` | Collection to create and upsert into. |
 | `QDRANT_DISTANCE` | `cosine` | `cosine`, `dot` or `euclid`. Used only when creating the collection. |
-| `VECTOR_SIZE` | `768` | Embedding dimension, ≥ 1. Must match the model. Used when creating the collection; an existing collection with a different size is an error. |
+| `VECTOR_SIZE` | `1536` | Embedding dimension, ≥ 1. Must match the model (or `EMBEDDING_DIMENSIONS`). Used when creating the collection; an existing collection with a different size is an error. |
 
 ## Embeddings
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `EMBEDDING_PROVIDER` | `ollama` | `ollama`, or `sentence_transformers` (also `sentence-transformers`, `st`), which needs the `sentence-transformers` extra installed. |
-| `EMBEDDING_MODEL` | `nomic-embed-text` | Model name for the provider. |
-| `OLLAMA_URL` | `http://ollama:11434` | Ollama endpoint. |
-| `OLLAMA_API_KEY` | unset | Sent as `Authorization: Bearer …`, for an Ollama behind an authenticating proxy. |
-| `OLLAMA_TIMEOUT_SECONDS` | `120` | Timeout for each embedding request, ≥ 1. |
+| `EMBEDDING_PROVIDER` | `openai` | `openai`: the OpenAI embeddings API, at api.openai.com or any compatible server (Ollama's `/v1`, vLLM, LM Studio, LiteLLM). Or `sentence_transformers` (also `sentence-transformers`, `st`), which needs the `sentence-transformers` extra installed. |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | Model name for the provider. |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Embeddings API base URL; requests go to `<base>/embeddings`. For Ollama: `http://ollama:11434/v1`. |
+| `OPENAI_API_KEY` | unset | Sent as `Authorization: Bearer …`. Not needed for an unauthenticated self-hosted server. |
+| `OPENAI_TIMEOUT_SECONDS` | `120` | Timeout for each embedding request, ≥ 1. |
+| `EMBEDDING_DIMENSIONS` | unset | Ask for shorter vectors (`text-embedding-3-*` only), ≥ 0; `0` or unset means the model's full size. Must equal `VECTOR_SIZE` when set. |
 | `EMBEDDING_CONTEXT_LENGTH` | `8192` | Model context in tokens. Texts longer than about 4 characters per token are truncated before embedding. `0` disables truncation. |
 | `HF_CACHE_DIR` | unset | Hugging Face model cache for `sentence_transformers`. If unset, `SENTENCE_TRANSFORMERS_HOME`, then `HF_HOME`, are used. |
 | `SENTENCE_TRANSFORMERS_HOME` | unset | See `HF_CACHE_DIR`. |
@@ -54,4 +55,6 @@ empty value (`NAME=`) counts as unset.
 |----------|---------|
 | `HF_CACHE_HOST_DIR` | Host folder `docker-compose.yaml` mounts at `HF_CACHE_DIR` (default `./.cache/huggingface`). |
 | `APP_VERSION` | Release of the image `docker-compose.prod.yaml` runs (default `latest`). |
+| `OLLAMA_EMBEDDING_MODEL` | Model `docker-compose.ollama.yaml` pulls and uses (default `nomic-embed-text`). |
+| `OLLAMA_VECTOR_SIZE` | Its dimension, used as `VECTOR_SIZE` with that override (default `768`). |
 | `UV_PUBLISH_TOKEN` | PyPI API token, only for publishing by hand with `uv publish`. Releases from GitHub don't need it. |

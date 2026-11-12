@@ -4,7 +4,7 @@ import builtins
 import sys
 import types
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import pytest
@@ -12,9 +12,11 @@ import pytest
 from calibre_web2rag import embeddings
 from calibre_web2rag.config import Settings
 from calibre_web2rag.embeddings import (
-    OllamaEmbedder,
+    OpenAIEmbedder,
     SentenceTransformerEmbedder,
+    _estimate_tokens,
     _load_sentence_transformer,
+    _request_batches,
     _truncate,
     build_embedder,
 )
@@ -35,19 +37,30 @@ class _FakeResponse:
 
 
 class _FakeClient:
-    """Stands in for httpx.Client; records headers and returns `body`."""
+    """Stands in for httpx.Client; records the request and returns `body`."""
 
     headers: Mapping[str, str] | None = None
-    # Any: a JSON body.
-    body: dict[str, Any] = {"embeddings": [[0.1, 0.2], [0.3, 0.4]]}  # noqa: RUF012 -- read-only default
+    base_url: str | None = None
+    # Any: JSON bodies.
+    last_json: ClassVar[dict[str, Any]] = {}
+    # Deliberately out of order, to check sorting by index.
+    body: ClassVar[dict[str, Any]] = {
+        "object": "list",
+        "data": [
+            {"object": "embedding", "index": 1, "embedding": [0.3, 0.4]},
+            {"object": "embedding", "index": 0, "embedding": [0.1, 0.2]},
+        ],
+    }
 
     def __init__(self, base_url: str, headers: Mapping[str, str] | None, timeout: int) -> None:
         type(self).headers = headers
+        type(self).base_url = base_url
 
     # Any: a JSON request body.
     def post(self, path: str, json: dict[str, Any]) -> _FakeResponse:
-        assert path == "/api/embed"
-        assert json["model"] == "nomic-embed-text"
+        assert path == "/embeddings"
+        assert json["model"] == "text-embedding-3-small"
+        type(self).last_json = json
         return _FakeResponse(self.body)
 
 
@@ -70,43 +83,121 @@ class _FakeSentenceTransformer:
         return [_Vector([1.0, 2.0]) if i % 2 == 0 else (3.0, 4.0) for i in range(len(chunks))]
 
 
-def _ollama(api_key: str | None = None) -> OllamaEmbedder:
-    return OllamaEmbedder(
-        model_name="nomic-embed-text",
-        ollama_url="http://ollama:11434",
+def _openai(
+    api_key: str | None = None,
+    dimensions: int | None = None,
+    base_url: str = "https://api.openai.com/v1",
+) -> OpenAIEmbedder:
+    return OpenAIEmbedder(
+        model_name="text-embedding-3-small",
+        base_url=base_url,
         api_key=api_key,
         timeout_seconds=30,
+        dimensions=dimensions,
     )
 
 
-def test_ollama_embedder_calls_embed_api(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openai_embedder_calls_embeddings_api(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(httpx, "Client", _FakeClient)
-    vectors = _ollama().encode(["a", "b"])
+    vectors = _openai(base_url="https://api.openai.com/v1/").encode(["a", "b"])
+    assert _FakeClient.base_url == "https://api.openai.com/v1"
+    assert _FakeClient.headers is None
+    assert _FakeClient.last_json["input"] == ["a", "b"]
+    assert _FakeClient.last_json["encoding_format"] == "float"
+    assert "dimensions" not in _FakeClient.last_json
     assert vectors == [[0.1, 0.2], [0.3, 0.4]]
 
 
-def test_ollama_embedder_uses_api_key_header(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openai_embedder_sends_dimensions(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(httpx, "Client", _FakeClient)
-    _ollama(api_key="secret")
+    _openai(dimensions=256).encode(["a", "b"])
+    assert _FakeClient.last_json["dimensions"] == 256
+
+
+def test_openai_embedder_uses_api_key_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    _openai(api_key="secret")
     assert _FakeClient.headers == {"Authorization": "Bearer secret"}
 
 
-def test_ollama_missing_embeddings_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _ErrorClient(_FakeClient):
-        body = {"error": "model not found"}  # noqa: RUF012 -- read-only
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"error": "model not found"},
+        {"data": [{"index": 0, "embedding": [0.1]}]},  # one vector for two inputs
+    ],
+)
+def test_openai_embedder_rejects_bad_response(
+    monkeypatch: pytest.MonkeyPatch, body: dict[str, Any]
+) -> None:
+    class _BadClient(_FakeClient):
+        pass
 
-    monkeypatch.setattr(httpx, "Client", _ErrorClient)
-    with pytest.raises(ValueError, match="missing 'embeddings'"):
-        _ollama().encode(["a"])
+    _BadClient.body = body
+    monkeypatch.setattr(httpx, "Client", _BadClient)
+    with pytest.raises(ValueError, match="missing 'data' or wrong length"):
+        _openai().encode(["a", "b"])
 
 
-def test_build_embedder_uses_ollama_provider(
+def test_openai_embedder_empty_input_skips_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _NoPostClient(_FakeClient):
+        # Any: a JSON request body.
+        def post(self, path: str, json: dict[str, Any]) -> _FakeResponse:
+            raise AssertionError("no request expected")
+
+    monkeypatch.setattr(httpx, "Client", _NoPostClient)
+    assert _openai().encode([]) == []
+
+
+def test_openai_embedder_splits_large_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+
+    class _EchoClient(_FakeClient):
+        # Any: a JSON request body.
+        def post(self, path: str, json: dict[str, Any]) -> _FakeResponse:
+            n = len(json["input"])
+            calls.append(n)
+            return _FakeResponse(
+                {"data": [{"index": i, "embedding": [float(i)]} for i in range(n)]}
+            )
+
+    monkeypatch.setattr(httpx, "Client", _EchoClient)
+    monkeypatch.setattr(embeddings, "_OPENAI_MAX_INPUTS_PER_REQUEST", 3)
+    assert len(_openai().encode(["t"] * 7)) == 7
+    assert calls == [3, 3, 1]
+
+
+def test_request_batches_respects_input_cap() -> None:
+    batches = _request_batches(["a"] * 5, max_inputs=2, max_tokens=10_000)
+    assert [len(b) for b in batches] == [2, 2, 1]
+
+
+def test_request_batches_respects_token_cap() -> None:
+    text = "x" * 40  # ~11 estimated tokens each
+    batches = _request_batches([text] * 4, max_inputs=100, max_tokens=25)
+    assert [len(b) for b in batches] == [2, 2]
+
+
+def test_estimate_tokens_counts_cjk_per_character() -> None:
+    assert _estimate_tokens("x" * 400) == 101
+    assert _estimate_tokens("漢" * 400) == 401
+
+
+def test_request_batches_splits_cjk_text() -> None:
+    cjk = "漢" * 100  # ~101 estimated tokens each, not ~26
+    batches = _request_batches([cjk] * 4, max_inputs=100, max_tokens=250)
+    assert [len(b) for b in batches] == [2, 2]
+
+
+def test_build_embedder_uses_openai_provider(
     monkeypatch: pytest.MonkeyPatch, make_settings: SettingsFactory
 ) -> None:
     monkeypatch.setattr(httpx, "Client", _FakeClient)
-    embedder = build_embedder(make_settings(embedding_provider="ollama"))
-    assert isinstance(embedder, OllamaEmbedder)
+    embedder = build_embedder(make_settings(embedding_dimensions=256))
+    assert isinstance(embedder, OpenAIEmbedder)
     assert embedder.max_tokens == 8192
+    assert embedder.dimensions == 256
+    assert _FakeClient.base_url == "http://localhost:11434/v1"
 
 
 def test_build_embedder_uses_st_cache_directory(
@@ -120,8 +211,8 @@ def test_build_embedder_uses_st_cache_directory(
 
 
 def test_build_embedder_unsupported_provider(make_settings: SettingsFactory) -> None:
-    with pytest.raises(ValueError, match="Unsupported EMBEDDING_PROVIDER 'openai'"):
-        build_embedder(make_settings(embedding_provider="openai"))
+    with pytest.raises(ValueError, match="Unsupported EMBEDDING_PROVIDER 'ollama'"):
+        build_embedder(make_settings(embedding_provider="ollama"))
 
 
 def test_sentence_transformer_encode_and_truncate(monkeypatch: pytest.MonkeyPatch) -> None:

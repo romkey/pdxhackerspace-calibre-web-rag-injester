@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **Breaking:** embeddings go through the OpenAI embeddings API
+  (`EMBEDDING_PROVIDER=openai`, the new default) instead of Ollama's own
+  API; the `ollama` provider and the `OLLAMA_URL`, `OLLAMA_API_KEY` and
+  `OLLAMA_TIMEOUT_SECONDS` variables are gone. Use `OPENAI_BASE_URL`,
+  `OPENAI_API_KEY` and `OPENAI_TIMEOUT_SECONDS`; for Ollama, set
+  `OPENAI_BASE_URL=http://ollama:11434/v1` (the Ollama override file does
+  this). The defaults are now `text-embedding-3-small` and
+  `VECTOR_SIZE=1536`. Optional `EMBEDDING_DIMENSIONS` asks for shorter
+  vectors. Requests are split to stay under the API's input and token
+  limits.
 - **Breaking:** requires Python 3.15 (was 3.11). The Docker image is based
   on `python:3.15-slim-trixie`.
 - **Breaking:** compose files are renamed to `docker-compose.yaml` (dev),

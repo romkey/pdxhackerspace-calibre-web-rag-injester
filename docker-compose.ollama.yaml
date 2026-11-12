@@ -1,4 +1,5 @@
-# Override: Ollama embeddings on an NVIDIA GPU. Use with either the
+# Override: Ollama embeddings on an NVIDIA GPU, through Ollama's
+# OpenAI-compatible API (/v1). Use with either the
 # development or the production compose file:
 #
 #   docker compose -f docker-compose.yaml -f docker-compose.ollama.yaml up --build
@@ -21,13 +22,13 @@ services:
               count: all
               capabilities: [gpu]
 
-  # Pulls EMBEDDING_MODEL into Ollama before the ingester starts.
+  # Pulls OLLAMA_EMBEDDING_MODEL into Ollama before the ingester starts.
   ollama-pull:
     image: curlimages/curl:8.23.0
     depends_on:
       - ollama
     environment:
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
     command:
       - sh
       - -c
@@ -39,8 +40,11 @@ services:
 
   app:
     environment:
-      EMBEDDING_PROVIDER: ollama
-      OLLAMA_URL: http://ollama:11434
+      # These replace the OpenAI settings in .env for this setup only.
+      EMBEDDING_PROVIDER: openai
+      OPENAI_BASE_URL: http://ollama:11434/v1
+      EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      VECTOR_SIZE: ${OLLAMA_VECTOR_SIZE:-768}
     depends_on:
       ollama:
         condition: service_started

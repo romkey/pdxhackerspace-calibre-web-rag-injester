@@ -11,7 +11,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-EMBEDDING_PROVIDERS = frozenset({"ollama", "sentence_transformers", "sentence-transformers", "st"})
+EMBEDDING_PROVIDERS = frozenset({"openai", "sentence_transformers", "sentence-transformers", "st"})
 DISTANCES = frozenset({"cosine", "dot", "euclid"})
 
 
@@ -31,15 +31,16 @@ class Settings:
     embedding_provider: str
     embedding_model: str
     hf_cache_dir: str | None
-    ollama_url: str
-    ollama_api_key: str | None
-    ollama_timeout_seconds: int
+    openai_base_url: str
+    openai_api_key: str | None
+    openai_timeout_seconds: int
     chunk_size: int
     chunk_overlap: int
     batch_size: int
     distance: str
     vector_size: int
     embedding_context_length: int
+    embedding_dimensions: int | None = None
     log_level: str = "INFO"
 
     @classmethod
@@ -90,22 +91,24 @@ class Settings:
             qdrant_url=env.get("QDRANT_URL") or "http://qdrant:6333",
             qdrant_api_key=optional("QDRANT_API_KEY"),
             qdrant_collection=env.get("QDRANT_COLLECTION") or "calibre_books",
-            embedding_provider=choice("EMBEDDING_PROVIDER", "ollama", EMBEDDING_PROVIDERS),
-            embedding_model=env.get("EMBEDDING_MODEL") or "nomic-embed-text",
+            embedding_provider=choice("EMBEDDING_PROVIDER", "openai", EMBEDDING_PROVIDERS),
+            embedding_model=env.get("EMBEDDING_MODEL") or "text-embedding-3-small",
             hf_cache_dir=(
                 optional("HF_CACHE_DIR")
                 or optional("SENTENCE_TRANSFORMERS_HOME")
                 or optional("HF_HOME")
             ),
-            ollama_url=env.get("OLLAMA_URL") or "http://ollama:11434",
-            ollama_api_key=optional("OLLAMA_API_KEY"),
-            ollama_timeout_seconds=integer("OLLAMA_TIMEOUT_SECONDS", 120, 1),
+            openai_base_url=env.get("OPENAI_BASE_URL") or "https://api.openai.com/v1",
+            openai_api_key=optional("OPENAI_API_KEY"),
+            openai_timeout_seconds=integer("OPENAI_TIMEOUT_SECONDS", 120, 1),
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             batch_size=integer("BATCH_SIZE", 64, 1),
             distance=choice("QDRANT_DISTANCE", "cosine", DISTANCES),
-            vector_size=integer("VECTOR_SIZE", 768, 1),
+            vector_size=integer("VECTOR_SIZE", 1536, 1),
             # 0 disables truncation.
             embedding_context_length=integer("EMBEDDING_CONTEXT_LENGTH", 8192, 0),
+            # 0 or unset: the model's full size.
+            embedding_dimensions=integer("EMBEDDING_DIMENSIONS", 0, 0) or None,
             log_level=log_level,
         )

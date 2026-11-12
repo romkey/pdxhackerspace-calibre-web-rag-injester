@@ -6,7 +6,8 @@ generation.
 **Runs as:** a batch CLI (`calibre-web2rag`): one pass over the library, then
 exit. Re-runs are idempotent (deterministic point IDs).
 **Talks to:** Calibre's `metadata.db` (SQLite, read-only), the library files,
-Qdrant (HTTP), and Ollama (HTTP) or a local sentence-transformers model.
+Qdrant (HTTP), and an OpenAI-compatible embeddings API (HTTP: OpenAI,
+Ollama, vLLM…) or a local sentence-transformers model.
 
 ## Flow
 
@@ -25,7 +26,7 @@ Qdrant (HTTP), and Ollama (HTTP) or a local sentence-transformers model.
 - `src/calibre_web2rag/calibre_db.py`: `CalibreRepository`, books from SQLite.
 - `src/calibre_web2rag/extractors.py`: DRM check and text extraction per format.
 - `src/calibre_web2rag/chunking.py`: sentence-aware `split_text` with overlap.
-- `src/calibre_web2rag/embeddings.py`: Ollama and sentence-transformers embedders.
+- `src/calibre_web2rag/embeddings.py`: OpenAI-API and sentence-transformers embedders.
 - `src/calibre_web2rag/ingest.py`: builds points and payloads; `ingest()`.
 - `src/calibre_web2rag/qdrant_store.py`: creates the collection and indexes; upserts.
 - `src/calibre_web2rag/links.py`: Calibre Web download and OPDS URLs.

@@ -16,17 +16,18 @@ def test_defaults() -> None:
     assert settings.qdrant_url == "http://qdrant:6333"
     assert settings.qdrant_api_key is None
     assert settings.qdrant_collection == "calibre_books"
-    assert settings.embedding_provider == "ollama"
-    assert settings.embedding_model == "nomic-embed-text"
+    assert settings.embedding_provider == "openai"
+    assert settings.embedding_model == "text-embedding-3-small"
     assert settings.hf_cache_dir is None
-    assert settings.ollama_url == "http://ollama:11434"
-    assert settings.ollama_api_key is None
-    assert settings.ollama_timeout_seconds == 120
+    assert settings.openai_base_url == "https://api.openai.com/v1"
+    assert settings.openai_api_key is None
+    assert settings.openai_timeout_seconds == 120
     assert settings.chunk_size == 1200
     assert settings.chunk_overlap == 120
     assert settings.batch_size == 64
     assert settings.distance == "cosine"
-    assert settings.vector_size == 768
+    assert settings.vector_size == 1536
+    assert settings.embedding_dimensions is None
     assert settings.embedding_context_length == 8192
     assert settings.log_level == "INFO"
 
@@ -43,7 +44,8 @@ def test_overrides() -> None:
             "CHUNK_OVERLAP": "0",
             "VECTOR_SIZE": "384",
             "EMBEDDING_CONTEXT_LENGTH": "0",
-            "OLLAMA_API_KEY": "dummy-key",
+            "OPENAI_API_KEY": "dummy-key",
+            "EMBEDDING_DIMENSIONS": "384",
             "LOG_LEVEL": "debug",
         }
     )
@@ -55,7 +57,8 @@ def test_overrides() -> None:
     assert settings.chunk_overlap == 0
     assert settings.vector_size == 384
     assert settings.embedding_context_length == 0
-    assert settings.ollama_api_key == "dummy-key"
+    assert settings.openai_api_key == "dummy-key"
+    assert settings.embedding_dimensions == 384
     assert settings.log_level == "DEBUG"
 
 
@@ -91,9 +94,10 @@ def test_required_variables(missing: str) -> None:
         ("CHUNK_SIZE", "0", "CHUNK_SIZE must be at least 1"),
         ("BATCH_SIZE", "-1", "BATCH_SIZE must be at least 1"),
         ("VECTOR_SIZE", "1.5", "VECTOR_SIZE must be a whole number"),
-        ("OLLAMA_TIMEOUT_SECONDS", "0", "OLLAMA_TIMEOUT_SECONDS must be at least 1"),
+        ("OPENAI_TIMEOUT_SECONDS", "0", "OPENAI_TIMEOUT_SECONDS must be at least 1"),
+        ("EMBEDDING_DIMENSIONS", "-1", "EMBEDDING_DIMENSIONS must be at least 0"),
+        ("EMBEDDING_PROVIDER", "ollama", "EMBEDDING_PROVIDER must be one of"),
         ("CHUNK_OVERLAP", "1200", "CHUNK_OVERLAP .* must be smaller than CHUNK_SIZE"),
-        ("EMBEDDING_PROVIDER", "openai", "EMBEDDING_PROVIDER must be one of"),
         ("QDRANT_DISTANCE", "manhattan", "QDRANT_DISTANCE must be one of"),
         ("LOG_LEVEL", "LOUD", "LOG_LEVEL 'LOUD' is not a logging level"),
     ],
