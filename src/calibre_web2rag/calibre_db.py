@@ -24,7 +24,6 @@ class CalibreRepository:
                     b.id,
                     b.title,
                     b.path,
-                    b.isbn,
                     b.uuid,
                     b.pubdate,
                     b.last_modified,
@@ -39,6 +38,9 @@ class CalibreRepository:
                 files = self._get_files(conn, book_id, row["path"])
                 if not files:
                     continue
+                # Calibre keeps ISBNs in the identifiers table; current
+                # metadata.db schemas have no books.isbn column.
+                identifiers = self._get_identifiers(conn, book_id)
                 books.append(
                     BookRecord(
                         book_id=book_id,
@@ -99,8 +101,8 @@ class CalibreRepository:
                             """,
                             book_id,
                         ),
-                        identifiers=self._get_identifiers(conn, book_id),
-                        isbn=row["isbn"],
+                        identifiers=identifiers,
+                        isbn=identifiers.get("isbn"),
                         uuid=row["uuid"],
                         published_at=row["pubdate"],
                         updated_at=row["last_modified"],
