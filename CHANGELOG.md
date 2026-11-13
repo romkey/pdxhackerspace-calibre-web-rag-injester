@@ -59,6 +59,11 @@ All notable changes to this project are documented here. The format follows
 - `scripts/tag-release.sh`; use the Release workflow or
   `scripts/bump-version.sh`.
 
+### Fixed
+
+- Ingestion no longer fails with `no such column: b.isbn` on current
+  Calibre libraries; the ISBN is read from the book's identifiers.
+
 ## [0.2.3]
 
 Earlier releases are recorded only in git history.
