@@ -1,24 +1,42 @@
-# Production: runs the released image from ghcr.io with Qdrant. Configure it
-# in .env next to this file (see .env.example and docs/configuration.md).
+# Production: runs the released image from ghcr.io with Qdrant and
+# PostgreSQL. Configure it in .env next to this file (see .env.example and
+# docs/configuration.md).
 #
-#   docker compose -f docker-compose.prod.yaml up -d
-#   docker compose -f docker-compose.prod.yaml run --rm app   # re-ingest
+#   docker compose -f docker-compose.prod.yaml up -d      # migrate, one full sync
 #   APP_VERSION=1.2.3 docker compose -f docker-compose.prod.yaml up -d   # pin a release
-#   docker compose -f docker-compose.prod.yaml build   # build the image locally instead
+#   docker compose -f docker-compose.prod.yaml build      # build the image locally instead
 #
-# The ingester is a batch job: it reads the library once, upserts into
-# Qdrant and exits. Run it again (from cron or by hand) to pick up new
-# books; re-ingesting is idempotent. So it has no port, no health check and
-# doesn't restart, unlike a long-running service.
+# The ingester is a batch job: each run syncs the library and exits, so it
+# has no port, no health check and doesn't restart. Schedule it from cron:
+#
+#   # hourly: changed and deleted books; nightly: full reconcile
+#   5 * * * * cd /srv/c2r && docker compose -f docker-compose.prod.yaml run --rm app calibre-web2rag --mode incremental
+#   30 3 * * * cd /srv/c2r && docker compose -f docker-compose.prod.yaml run --rm app calibre-web2rag --mode full
+#
+# Overlapping runs are safe: a second run finds the lock held and exits.
 
 services:
+  # Applies database migrations, then exits.
+  migrate:
+    image: ghcr.io/romkey/pdxhackerspace-calibre-web-rag-injester:${APP_VERSION:-latest}
+    command: ["calibre-web2rag", "migrate"]
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
   app:
     image: ghcr.io/romkey/pdxhackerspace-calibre-web-rag-injester:${APP_VERSION:-latest}
     build:
       context: .
       target: production
+    command: ["calibre-web2rag", "run", "--mode", "full"]
     restart: "no"
-    # On SIGTERM it finishes the file it is embedding (requests can take up
+    # On SIGTERM it finishes the book it is reading (requests can take up
     # to OPENAI_TIMEOUT_SECONDS each) and upserts; don't SIGKILL it at 10s.
     stop_grace_period: 5m
     env_file:
@@ -31,6 +49,8 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     # Least privilege: nothing to write but /tmp, no capabilities.
     read_only: true
     tmpfs:
@@ -56,5 +76,24 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # No ports: only the ingester (and other pipeline jobs on this network)
+  # reach it. Back up the db-data volume.
+  db:
+    image: postgres:18-trixie
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   qdrant-data:
+  db-data:

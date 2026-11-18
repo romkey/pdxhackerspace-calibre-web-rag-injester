@@ -6,8 +6,59 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The ingester is now the ebook-library source of the hackerspace RAG
+  pipeline (member tier). New commands: `calibre-web2rag migrate`,
+  `calibre-web2rag run --mode incremental|full|reindex` and
+  `calibre-web2rag status`.
+- PostgreSQL (`DATABASE_URL`, required): a staging store of every book, the
+  shared entity registry (works, manifestations, series, merge decisions, a
+  review queue, entity aliases), the flat `catalog_items` table for the
+  realtime catalog tool, an LLM result cache, enrichment results, a
+  quarantine log and per-run status. The schema is applied with Alembic.
+- Every book is read, including books without files: sort title, subtitle
+  (custom column), series index, date added, cover path, all identifiers
+  and custom columns, every format with its size, and the table of contents
+  from the EPUB navigation or PDF outline.
+- Cross-format works: `work_id` from the ISBN-13 or a normalized title and
+  surname; books from other sources (audiobook, hardcopy) are merged
+  automatically when the titles match closely, or queued for review.
+- Enrichment from Open Library, then Google Books (`ENRICHMENT_ENABLED`,
+  `GOOGLE_BOOKS_API_KEY`), for books missing a description or tags.
+- Ingest-time LLM tasks through the gateway (`LLM_MODEL`, `LLM_BASE_URL`,
+  `LLM_API_KEY`, `LLM_TIMEOUT_SECONDS`): shared topic taxonomy
+  (`TOPIC_TAXONOMY_FILE`), marketing-copy detection, machine-generated "good
+  for" summaries, chunk context and linker confirmation.
+- Hybrid search: each point has a `dense` and a `sparse` keyword vector
+  (`calibre_web2rag.sparse.sparse_vector` builds query vectors). Collection
+  metadata records the embedding model.
+- A secret scanner redacts credentials before staging and logs them to the
+  quarantine table.
+- A library overview document in `hs_member`, regenerated every run
+  (`LIBRARY_REQUEST_INFO`).
+- Optional full text in `hs_booktext` (`BOOKTEXT_ENABLED`, off), chunked by
+  EPUB chapter or PDF page.
+- Sync safety: unchanged books and text are skipped, deletions propagate,
+  full runs delete unseen points unless they saw less than half the books
+  expected, and an advisory lock stops overlapping runs.
+
 ### Changed
 
+- **Breaking:** the Qdrant layout is new. `QDRANT_COLLECTION` is gone;
+  points go to `QDRANT_CATALOG_COLLECTION` (`hs_catalog`, one point per
+  work), `QDRANT_MEMBER_COLLECTION` (`hs_member`) and
+  `QDRANT_BOOKTEXT_COLLECTION` (`hs_booktext`), with the shared payload
+  (`source`, `doc_id`, `text`, `context`, `tier`, …) instead of
+  `chunk_type`/`chunk_text`. Existing collections are not migrated: start
+  them over.
+- **Breaking:** full text is no longer indexed by default; set
+  `BOOKTEXT_ENABLED=true`.
+- **Breaking:** `CHUNK_SIZE` and `CHUNK_OVERLAP` default to 1800 and 150.
+- Links point at the Calibre-web book page (`<base>/book/<id>`, or
+  `CALIBRE_WEB_BOOK_URL_TEMPLATE`); per-format download links stay.
+- Each run reads a snapshot of `metadata.db` and checks its layout first.
+- PDF text is extracted page by page, with page numbers.
 - **Breaking:** embeddings go through the OpenAI embeddings API
   (`EMBEDDING_PROVIDER=openai`, the new default) instead of Ollama's own
   API; the `ollama` provider and the `OLLAMA_URL`, `OLLAMA_API_KEY` and

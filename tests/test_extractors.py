@@ -261,7 +261,10 @@ def test_extract_pdf_sections_empty(blank_pdf_path: Path) -> None:
 
 def test_try_extract_pdf_sections_text(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_pdf_reader(monkeypatch, ["hello", "world"])
-    assert try_extract_pdf_sections(Path("x.pdf")) == [TextSection(title=None, text="hello\nworld")]
+    assert try_extract_pdf_sections(Path("x.pdf")) == [
+        TextSection(title=None, text="hello", page=1),
+        TextSection(title=None, text="world", page=2),
+    ]
 
 
 def test_try_extract_pdf_sections_encrypted(encrypted_pdf_path: Path) -> None:

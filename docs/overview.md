@@ -1,44 +1,59 @@
 # calibre-web2rag overview
 
-**What:** ingests a Calibre ebook library (metadata and the text of DRM-free
-PDF, EPUB and MOBI files) into a Qdrant collection for retrieval-augmented
-generation.
-**Runs as:** a batch CLI (`calibre-web2rag`): one pass over the library, then
-exit. Re-runs are idempotent (deterministic point IDs).
-**Talks to:** Calibre's `metadata.db` (SQLite, read-only), the library files,
-Qdrant (HTTP), and an OpenAI-compatible embeddings API (HTTP: OpenAI,
-Ollama, vLLM…) or a local sentence-transformers model.
+**What:** the ebook-library source of the PDX Hackerspace RAG pipeline
+(plans 00 "shared architecture" and 02 "ebook library"). Member tier only.
+**Runs as:** a batch CLI. `migrate` applies the schema; `run --mode
+incremental` (hourly), `run --mode full` (nightly) or `run --mode reindex`
+syncs once and exits; `status` prints recent runs as JSON.
+**Talks to:** Calibre's `metadata.db` (a read-only snapshot; never
+Calibre-web's `app.db`) and book files, PostgreSQL, Qdrant, an
+OpenAI-compatible gateway (embeddings and generation), Open Library and
+Google Books.
 
 ## Flow
 
-1. `calibre_db` reads books and their supported files from `metadata.db`.
-2. Per book: one `book_metadata` point, `description` points from the
-   Calibre comments, and `content` points from each file's extracted text.
-3. One `library_summary` set of points for catalog-wide questions.
-4. Points are embedded in batches and upserted. On SIGTERM it finishes
-   the file being read, upserts what it has, and exits; re-running
-   completes the rest.
+1. Snapshot `metadata.db`, verify its tables, list book IDs with `last_modified`.
+2. For each new or changed book: clean the description, read the EPUB/PDF
+   table of contents, redact secrets (quarantine log), enrich from Open
+   Library/Google Books if description or tags are missing, ask the LLM for
+   topics and a "good for" summary, write the staging row.
+3. Registry: `work_id` (ISBN-13, else title slug + surname), merge decisions,
+   fuzzy match against other sources' works (auto-merge or review queue),
+   series, the ebook manifestation; then the flat `catalog_items` row.
+4. Index: one `hs_catalog` point per touched work (from all its
+   manifestations), the regenerated library overview in `hs_member`, and
+   optionally full text in `hs_booktext`. Dense + sparse vectors; unchanged
+   text (by content hash) is not re-embedded.
+5. Deletions propagate every run; `full` also deletes points not stamped
+   with this run's ID. A run seeing < half the expected books deletes
+   nothing and exits 1. An advisory lock stops overlapping runs.
 
 ## Files
 
-- `src/calibre_web2rag/__main__.py`: command line, logging, SIGTERM, exit codes.
-- `src/calibre_web2rag/config.py`: `Settings.from_env()`; validates every variable.
-- `src/calibre_web2rag/calibre_db.py`: `CalibreRepository`, books from SQLite.
-- `src/calibre_web2rag/extractors.py`: DRM check and text extraction per format.
-- `src/calibre_web2rag/chunking.py`: sentence-aware `split_text` with overlap.
-- `src/calibre_web2rag/embeddings.py`: OpenAI-API and sentence-transformers embedders.
-- `src/calibre_web2rag/ingest.py`: builds points and payloads; `ingest()`.
-- `src/calibre_web2rag/qdrant_store.py`: creates the collection and indexes; upserts.
-- `src/calibre_web2rag/links.py`: Calibre Web download and OPDS URLs.
-- `src/calibre_web2rag/models.py`: `BookRecord`, `CalibreFile`, `TextSection`.
-- `tests/`: pytest, one file per module; `conftest.py` has settings/book factories.
-- `Dockerfile`: `dev` and `production` stages.
-- `docker-compose.yaml` (dev, with Qdrant), `.test`, `.lint`, `.prod`,
-  and `docker-compose.ollama.yaml` (GPU Ollama override).
+- `__main__.py`: CLI, logging, SIGTERM, exit codes.
+- `config.py`: `Settings.from_env()`; validates every variable.
+- `pipeline.py`: `Pipeline.run(mode)`: staging, registry, indexing, reconcile.
+- `calibre_db.py`: snapshot, schema check, `CalibreRepository`.
+- `documents.py`: point IDs, payloads, catalog and overview text.
+- `db.py`: psycopg queries; `migrate()`. `migrations/`: Alembic schema.
+- `works.py`: ISBN normalization, work IDs, title similarity.
+- `toc.py`: EPUB navigation and PDF outline. `extractors.py`: full text.
+- `sanitize.py`: secret scanner. `linker.py`: alias matching.
+- `llm.py`: gateway chat tasks, cached. `enrichment.py`: book lookups.
+- `embeddings.py`: dense embedders. `sparse.py`: keyword vectors.
+- `qdrant_store.py`: collections, payload indexes, upserts, reconcile.
+- `taxonomy.txt`: the shared topic taxonomy.
+
+## Shared tables (contract with other sources)
+
+`staging_documents`, `registry_works`, `registry_manifestations`,
+`registry_series`, `registry_merges`, `registry_review_queue`,
+`entity_aliases`, `catalog_items`, `quarantine`, `sync_runs`, `llm_cache`,
+`enrichment`. Created `IF NOT EXISTS`; this repo's Alembic version table is
+`calibre_web2rag_alembic_version`.
 
 ## Conventions
 
-- All configuration from environment variables; see docs/configuration.md.
-- Unreadable or DRM-protected files are logged and skipped; one bad book
-  never stops the run.
+- Configuration from environment variables; see docs/configuration.md.
+- One bad book is logged and skipped; it never stops the run.
 - Rules: https://github.com/romkey/python-ai-rules/blob/main/RULES.md

@@ -13,13 +13,16 @@ classifiers = [
   "Programming Language :: Python :: 3.15",
 ]
 dependencies = [
+  "alembic>=1.20.1",
   "beautifulsoup4>=4.15.0",
   "ebooklib>=0.21",
   "httpx>=0.28.1",
   "mobi>=0.4.1",
+  "psycopg[binary]>=3.3.9",
   "pypdf>=7.0.1",
   "python-dotenv>=1.2.4",
   "qdrant-client>=1.20.0",
+  "sqlalchemy>=2.1.9",
 ]
 
 [project.optional-dependencies]
@@ -83,10 +86,16 @@ ignore_missing_imports = true
 addopts = ["--cov", "--cov-report=term-missing", "--strict-markers"]
 testpaths = ["tests"]
 xfail_strict = true
+filterwarnings = [
+  # Tests use Qdrant's in-memory mode, which ignores payload indexes.
+  "ignore:Payload indexes have no effect:UserWarning",
+]
 
 [tool.coverage.run]
 source = ["calibre_web2rag"]
 branch = true
+# Alembic loads migrations by path; tests/test_db.py runs them.
+omit = ["*/calibre_web2rag/migrations/*"]
 
 [tool.coverage.report]
 fail_under = 95
