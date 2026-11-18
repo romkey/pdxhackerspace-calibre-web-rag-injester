@@ -72,4 +72,4 @@ def test_overview_sections() -> None:
     assert sections["How to request additions to the ebook library"] == "Ask Pat."
     empty = dict(overview_sections([], library_url="https://b", request_info=None))
     assert "library of 0 books" in empty["The PDX Hackerspace ebook library"]
-    assert "https://b" in empty["How to reach the ebook library"]
+    assert empty["How to reach the ebook library"] == "Members open the library at https://b."

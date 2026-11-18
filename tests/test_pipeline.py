@@ -204,7 +204,10 @@ def test_full_run_builds_catalog_overview_and_tables(
     assert overview[0]["heading_path"] == ["The PDX Hackerspace ebook library"]
     texts = " ".join(p["text"] for p in overview)
     assert "ebook library of 3 books" in texts
-    assert "https://books.example" in texts
+    reach = [p["text"] for p in overview if p["heading_path"][-1].startswith("How to reach")]
+    assert reach == [
+        "How to reach the ebook library\nMembers open the library at https://books.example."
+    ]
     assert all(p["context"] for p in overview)
 
     staged = db.staged_documents(SOURCE)
