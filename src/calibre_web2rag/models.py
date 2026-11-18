@@ -1,3 +1,5 @@
+"""Plain records passed between the stages of a run."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -8,6 +10,15 @@ from pathlib import Path
 class TextSection:
     title: str | None
     text: str
+    # 1-based page number, for sections that come from a PDF page.
+    page: int | None = None
+
+
+@dataclass(frozen=True)
+class TocEntry:
+    title: str
+    level: int = 0
+    page: int | None = None
 
 
 @dataclass(frozen=True)
@@ -16,10 +27,14 @@ class CalibreFile:
     file_path: Path
     file_name: str
     size_bytes: int | None
+    # False when metadata.db lists the format but the file isn't on disk.
+    exists: bool = True
 
 
 @dataclass(frozen=True)
 class BookRecord:
+    """One book as Calibre's metadata.db describes it."""
+
     book_id: int
     title: str
     authors: list[str]
@@ -36,3 +51,15 @@ class BookRecord:
     updated_at: str | None
     path: str
     files: list[CalibreFile] = field(default_factory=list)
+    sort_title: str | None = None
+    subtitle: str | None = None
+    series_index: float | None = None
+    added_at: str | None = None
+    has_cover: bool = False
+    # Custom columns by label; values are str, int, float, bool or lists of str.
+    custom_columns: dict[str, object] = field(default_factory=dict)
+
+    @property
+    def cover_path(self) -> str | None:
+        """Cover image path relative to the library root (Calibre's layout)."""
+        return f"{self.path}/cover.jpg" if self.has_cover else None

@@ -1,95 +1,218 @@
+"""Qdrant collections with a dense and a sparse (keyword) vector per point."""
+
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PayloadSchemaType, PointStruct, VectorParams
+from qdrant_client import models as qm
 
 logger = logging.getLogger(__name__)
 
+DENSE = "dense"
+SPARSE = "sparse"
 
-def _distance(name: str) -> Distance:
+# Payload indexes every text collection gets (shared architecture), plus
+# the catalog's own filter fields.
+COMMON_INDEXES: dict[str, qm.PayloadSchemaType] = {
+    "source": qm.PayloadSchemaType.KEYWORD,
+    "tier": qm.PayloadSchemaType.KEYWORD,
+    "doc_id": qm.PayloadSchemaType.KEYWORD,
+    "asset_ids": qm.PayloadSchemaType.KEYWORD,
+    "location_ids": qm.PayloadSchemaType.KEYWORD,
+    "topics": qm.PayloadSchemaType.KEYWORD,
+    "section": qm.PayloadSchemaType.KEYWORD,
+    "updated_at": qm.PayloadSchemaType.DATETIME,
+    "sync_run_id": qm.PayloadSchemaType.KEYWORD,
+}
+CATALOG_INDEXES: dict[str, qm.PayloadSchemaType] = {
+    "work_id": qm.PayloadSchemaType.KEYWORD,
+    "authors": qm.PayloadSchemaType.KEYWORD,
+    "formats": qm.PayloadSchemaType.KEYWORD,
+    "languages": qm.PayloadSchemaType.KEYWORD,
+    "series": qm.PayloadSchemaType.KEYWORD,
+    "tags": qm.PayloadSchemaType.KEYWORD,
+    "year": qm.PayloadSchemaType.INTEGER,
+}
+
+
+class CollectionMismatchError(RuntimeError):
+    """An existing collection was built with a different model or layout."""
+
+
+def _distance(name: str) -> qm.Distance:
     match name.lower():
         case "cosine":
-            return Distance.COSINE
+            return qm.Distance.COSINE
         case "dot":
-            return Distance.DOT
+            return qm.Distance.DOT
         case "euclid":
-            return Distance.EUCLID
+            return qm.Distance.EUCLID
         case _:
             raise ValueError(f"Unsupported Qdrant distance metric: {name}")
 
 
-_PAYLOAD_INDEXES: dict[str, PayloadSchemaType] = {
-    "authors": PayloadSchemaType.KEYWORD,
-    "tags": PayloadSchemaType.KEYWORD,
-    "languages": PayloadSchemaType.KEYWORD,
-    "series": PayloadSchemaType.KEYWORD,
-    "publisher": PayloadSchemaType.KEYWORD,
-    "book_id": PayloadSchemaType.INTEGER,
-    "chunk_type": PayloadSchemaType.KEYWORD,
-}
+def _match(key: str, value: str) -> qm.FieldCondition:
+    return qm.FieldCondition(key=key, match=qm.MatchValue(value=value))
 
 
 class QdrantStore:
+    """One collection. ``metadata`` records the embedding model and encoders."""
+
     def __init__(
         self,
         *,
-        url: str,
-        api_key: str | None,
+        client: QdrantClient,
         collection: str,
         vector_size: int,
         distance: str,
+        # Any: collection metadata is free-form JSON.
+        metadata: Mapping[str, Any],
+        indexes: Mapping[str, qm.PayloadSchemaType] = COMMON_INDEXES,
     ) -> None:
+        self.client = client
         self.collection = collection
-        self.client = QdrantClient(url=url, api_key=api_key)
-        self._ensure_collection(vector_size=vector_size, distance=distance)
+        self._ensure(vector_size, distance, dict(metadata), indexes)
 
-    def _ensure_collection(self, *, vector_size: int, distance: str) -> None:
-        exists = self.client.collection_exists(self.collection)
-        if not exists:
+    def _ensure(
+        self,
+        vector_size: int,
+        distance: str,
+        # Any: collection metadata is free-form JSON.
+        metadata: dict[str, Any],
+        indexes: Mapping[str, qm.PayloadSchemaType],
+    ) -> None:
+        if not self.client.collection_exists(self.collection):
             self.client.create_collection(
                 collection_name=self.collection,
-                vectors_config=VectorParams(size=vector_size, distance=_distance(distance)),
+                vectors_config={
+                    DENSE: qm.VectorParams(size=vector_size, distance=_distance(distance))
+                },
+                sparse_vectors_config={SPARSE: qm.SparseVectorParams(modifier=qm.Modifier.IDF)},
+                metadata=metadata,
             )
+            logger.info("Created Qdrant collection %s", self.collection)
         else:
-            existing_size = self._existing_vector_size()
-            if existing_size is not None and existing_size != vector_size:
-                raise ValueError(
-                    f"Qdrant collection '{self.collection}' already exists with vector size "
-                    f"{existing_size}, but VECTOR_SIZE is {vector_size}. "
-                    "VECTOR_SIZE is only used at collection creation time. "
-                    "Use a new QDRANT_COLLECTION name or recreate the collection."
-                )
-        self._ensure_payload_indexes()
+            self._check_existing(vector_size, metadata)
+        for field_name, schema in indexes.items():
+            # Creating an index that exists is a no-op in Qdrant.
+            self.client.create_payload_index(
+                collection_name=self.collection, field_name=field_name, field_schema=schema
+            )
 
-    def _ensure_payload_indexes(self) -> None:
-        for field_name, schema_type in _PAYLOAD_INDEXES.items():
-            try:
-                self.client.create_payload_index(
-                    collection_name=self.collection,
-                    field_name=field_name,
-                    field_schema=schema_type,
-                )
-            # Qdrant reports an existing index as an error; the client's exception
-            # types vary by transport (HTTP/gRPC), so catch broadly and log it.
-            except Exception as e:
-                logger.debug("Payload index for %r not created (may exist): %s", field_name, e)
-
-    def upsert(self, points: Iterable[PointStruct]) -> None:
-        self.client.upsert(collection_name=self.collection, points=list(points))
-
-    def _existing_vector_size(self) -> int | None:
+    # Any: collection metadata is free-form JSON.
+    def _check_existing(self, vector_size: int, metadata: dict[str, Any]) -> None:
         info = self.client.get_collection(self.collection)
-        vectors: Any = info.config.params.vectors
-        # Single-vector collections return VectorParams directly.
-        if hasattr(vectors, "size"):
-            return int(vectors.size)
-        # Named-vector collections return dict[str, VectorParams].
-        if isinstance(vectors, dict) and vectors:
-            first = next(iter(vectors.values()))
-            if hasattr(first, "size"):
-                return int(first.size)
-        return None
+        vectors = info.config.params.vectors
+        sparse = info.config.params.sparse_vectors or {}
+        if not isinstance(vectors, dict) or DENSE not in vectors or SPARSE not in sparse:
+            raise CollectionMismatchError(
+                f"Qdrant collection {self.collection!r} exists without the {DENSE!r} and "
+                f"{SPARSE!r} vectors; delete it (indexes are rebuilt from staging) or pick "
+                "another collection name"
+            )
+        if vectors[DENSE].size != vector_size:
+            raise CollectionMismatchError(
+                f"Qdrant collection {self.collection!r} has {vectors[DENSE].size}-dimension "
+                f"vectors but VECTOR_SIZE is {vector_size}"
+            )
+        existing = info.config.metadata or {}
+        model = existing.get("embedding_model")
+        if model is None:
+            self.client.update_collection(collection_name=self.collection, metadata=metadata)
+        elif model != metadata.get("embedding_model"):
+            raise CollectionMismatchError(
+                f"Qdrant collection {self.collection!r} was embedded with {model!r}, not "
+                f"{metadata.get('embedding_model')!r}. Changing the model means a full "
+                "re-embed: recreate the collection, then run every source with --mode reindex"
+            )
+
+    def upsert(self, points: list[qm.PointStruct]) -> None:
+        if points:
+            self.client.upsert(collection_name=self.collection, points=points)
+
+    def existing_hashes(self, point_ids: Iterable[str]) -> dict[str, str | None]:
+        """point id -> payload content_hash, for the points that exist."""
+        ids = list(point_ids)
+        found: dict[str, str | None] = {}
+        for start in range(0, len(ids), 256):
+            records = self.client.retrieve(
+                collection_name=self.collection,
+                ids=ids[start : start + 256],
+                with_payload=["content_hash"],
+            )
+            for record in records:
+                found[str(record.id)] = (record.payload or {}).get("content_hash")
+        return found
+
+    # Any: payload values are JSON.
+    def set_payload(self, point_ids: list[str], payload: dict[str, Any]) -> None:
+        if point_ids:
+            self.client.set_payload(
+                collection_name=self.collection,
+                payload=payload,
+                points=qm.PointIdsList(points=list(point_ids)),
+            )
+
+    # Any: payload values are JSON.
+    def set_payload_for_doc(self, source: str, doc_id: str, payload: dict[str, Any]) -> None:
+        self.client.set_payload(
+            collection_name=self.collection,
+            payload=payload,
+            points=qm.Filter(must=[_match("source", source), _match("doc_id", doc_id)]),
+        )
+
+    def delete_ids(self, point_ids: list[str]) -> None:
+        if point_ids:
+            self.client.delete(
+                collection_name=self.collection,
+                points_selector=qm.PointIdsList(points=list(point_ids)),
+            )
+
+    def delete_docs(self, source: str, doc_ids: list[str]) -> None:
+        if doc_ids:
+            self.client.delete(
+                collection_name=self.collection,
+                points_selector=qm.FilterSelector(
+                    filter=qm.Filter(
+                        must=[
+                            _match("source", source),
+                            qm.FieldCondition(key="doc_id", match=qm.MatchAny(any=doc_ids)),
+                        ]
+                    )
+                ),
+            )
+
+    def delete_stale(self, source: str, run_id: str) -> int:
+        """Delete this source's points not stamped with ``run_id``."""
+        stale = qm.Filter(must=[_match("source", source)], must_not=[_match("sync_run_id", run_id)])
+        count = self.client.count(collection_name=self.collection, count_filter=stale).count
+        if count:
+            self.client.delete(
+                collection_name=self.collection, points_selector=qm.FilterSelector(filter=stale)
+            )
+        return count
+
+    def count(self, source: str | None = None) -> int:
+        selector = qm.Filter(must=[_match("source", source)]) if source else None
+        return self.client.count(collection_name=self.collection, count_filter=selector).count
+
+    # Any: payloads are JSON.
+    def payloads(self, source: str | None = None) -> list[dict[str, Any]]:
+        """Every payload in the collection (or one source's); for tests and checks."""
+        selector = qm.Filter(must=[_match("source", source)]) if source else None
+        out: list[dict[str, Any]] = []
+        offset: Any = None  # Any: Qdrant's opaque scroll offset
+        while True:
+            records, offset = self.client.scroll(
+                collection_name=self.collection,
+                scroll_filter=selector,
+                limit=256,
+                offset=offset,
+                with_payload=True,
+            )
+            out.extend(r.payload or {} for r in records)
+            if offset is None:
+                return out

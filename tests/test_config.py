@@ -4,7 +4,11 @@ import pytest
 
 from calibre_web2rag.config import ConfigError, Settings
 
-REQUIRED = {"CALIBRE_METADATA_DB": "/lib/metadata.db", "CALIBRE_LIBRARY_ROOT": "/lib"}
+REQUIRED = {
+    "CALIBRE_METADATA_DB": "/lib/metadata.db",
+    "CALIBRE_LIBRARY_ROOT": "/lib",
+    "DATABASE_URL": "postgresql://app:pw@db:5432/app",
+}
 
 
 def test_defaults() -> None:
@@ -15,15 +19,24 @@ def test_defaults() -> None:
     assert settings.calibre_download_url_template is None
     assert settings.qdrant_url == "http://qdrant:6333"
     assert settings.qdrant_api_key is None
-    assert settings.qdrant_collection == "calibre_books"
+    assert settings.database_url == "postgresql://app:pw@db:5432/app"
+    assert settings.member_collection == "hs_member"
+    assert settings.catalog_collection == "hs_catalog"
+    assert settings.booktext_collection == "hs_booktext"
+    assert settings.booktext_enabled is False
+    assert settings.llm_model is None
+    assert settings.gateway_base_url == "http://localhost:8080/v1"
+    assert settings.gateway_api_key is None
+    assert settings.enrichment_enabled is True
+    assert settings.calibre_web_book_url_template is None
     assert settings.embedding_provider == "openai"
     assert settings.embedding_model == "nomic-ai/modernbert-embed-base"
     assert settings.hf_cache_dir is None
     assert settings.openai_base_url == "http://localhost:8080/v1"
     assert settings.openai_api_key is None
     assert settings.openai_timeout_seconds == 120
-    assert settings.chunk_size == 1200
-    assert settings.chunk_overlap == 120
+    assert settings.chunk_size == 1800
+    assert settings.chunk_overlap == 150
     assert settings.batch_size == 64
     assert settings.distance == "cosine"
     assert settings.vector_size == 768
@@ -51,8 +64,20 @@ def test_overrides() -> None:
             "EMBEDDING_QUERY_PREFIX": "query: ",
             "EMBEDDING_DOCUMENT_PREFIX": "passage: ",
             "LOG_LEVEL": "debug",
+            "BOOKTEXT_ENABLED": "yes",
+            "ENRICHMENT_ENABLED": "off",
+            "LLM_MODEL": "qwen3",
+            "LLM_BASE_URL": "http://gateway/v1",
+            "LLM_API_KEY": "llm-key",
+            "QDRANT_CATALOG_COLLECTION": "books_catalog",
         }
     )
+    assert settings.booktext_enabled is True
+    assert settings.enrichment_enabled is False
+    assert settings.llm_model == "qwen3"
+    assert settings.gateway_base_url == "http://gateway/v1"
+    assert settings.gateway_api_key == "llm-key"
+    assert settings.catalog_collection == "books_catalog"
     assert settings.calibre_web_base_url == "https://books.example"
     assert settings.embedding_provider == "sentence_transformers"
     assert settings.distance == "dot"
@@ -71,7 +96,7 @@ def test_overrides() -> None:
 def test_empty_values_mean_unset() -> None:
     settings = Settings.from_env({**REQUIRED, "QDRANT_API_KEY": "", "CHUNK_SIZE": ""})
     assert settings.qdrant_api_key is None
-    assert settings.chunk_size == 1200
+    assert settings.chunk_size == 1800
 
 
 def test_hf_cache_dir_precedence() -> None:
@@ -108,9 +133,12 @@ def test_required_variables(missing: str) -> None:
             r"EMBEDDING_DIMENSIONS \(512\) must equal VECTOR_SIZE \(768\)",
         ),
         ("EMBEDDING_PROVIDER", "ollama", "EMBEDDING_PROVIDER must be one of"),
-        ("CHUNK_OVERLAP", "1200", "CHUNK_OVERLAP .* must be smaller than CHUNK_SIZE"),
+        ("CHUNK_OVERLAP", "1800", "CHUNK_OVERLAP .* must be smaller than CHUNK_SIZE"),
         ("QDRANT_DISTANCE", "manhattan", "QDRANT_DISTANCE must be one of"),
         ("LOG_LEVEL", "LOUD", "LOG_LEVEL 'LOUD' is not a logging level"),
+        ("BOOKTEXT_ENABLED", "maybe", "BOOKTEXT_ENABLED must be true or false"),
+        ("QDRANT_BOOKTEXT_COLLECTION", "hs_member", "must be three different collections"),
+        ("QDRANT_MEMBER_COLLECTION", "hs_public", "never writes to hs_public"),
     ],
 )
 def test_invalid_values_name_the_variable(name: str, value: str, message: str) -> None:

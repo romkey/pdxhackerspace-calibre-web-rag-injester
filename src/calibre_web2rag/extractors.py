@@ -131,15 +131,17 @@ def extract_mobi_sections(path: Path) -> list[TextSection]:
 
 
 def try_extract_pdf_sections(path: Path) -> list[TextSection]:
-    """Check DRM and extract in one pass, creating PdfReader only once."""
+    """Check DRM and extract in one pass: one section per page with text."""
     try:
         reader = PdfReader(str(path))
         if reader.is_encrypted:
             return []
-        text = "\n".join((page.extract_text() or "") for page in reader.pages)
-        if not text.strip():
-            return []
-        return [TextSection(title=None, text=text)]
+        sections: list[TextSection] = []
+        for number, page in enumerate(reader.pages, start=1):
+            text = page.extract_text() or ""
+            if text.strip():
+                sections.append(TextSection(title=None, text=text, page=number))
+        return sections
     except Exception as e:
         logger.warning("Cannot read %s: %s", path, e)
         return []

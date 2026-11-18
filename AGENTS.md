@@ -23,3 +23,11 @@ open a pull request; CI and Lint must pass before it can merge.
   the distribution and command name (`calibre-web2rag`); the image is
   named after the repo.
 - A local `.env` is loaded with python-dotenv for runs outside Docker.
+- PostgreSQL is shared with the pipeline's other sources: the shared tables
+  are created `IF NOT EXISTS`, and Alembic uses its own version table
+  (`calibre_web2rag_alembic_version`). Queries are plain psycopg; Alembic
+  migrations hold raw SQL. Migrations live in the package so the installed
+  app can run `calibre-web2rag migrate`.
+- The design follows the pipeline plans "00 — shared architecture" and
+  "02 — ebook library" (see docs/overview.md); tier is member only, and the
+  config refuses `hs_public`.

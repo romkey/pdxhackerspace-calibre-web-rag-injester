@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import signal
 import threading
 from collections.abc import Callable
@@ -8,8 +9,10 @@ from typing import Any
 import pytest
 
 from calibre_web2rag import __main__ as cli
-from calibre_web2rag import __version__
+from calibre_web2rag import __version__, pipeline
 from calibre_web2rag.config import Settings
+from calibre_web2rag.db import RunCounts
+from calibre_web2rag.pipeline import RunResult
 
 SettingsFactory = Callable[..., Settings]  # the make_settings fixture
 
@@ -22,6 +25,19 @@ def _no_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _use_settings(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: settings))
+
+
+def _fake_run(
+    monkeypatch: pytest.MonkeyPatch, result: RunResult | Exception, seen: list[Any] | None = None
+) -> None:
+    def run(settings: Settings, mode: str, stop: threading.Event) -> RunResult:
+        if seen is not None:
+            seen.append((mode, stop))
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(pipeline, "run", run)
 
 
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:
@@ -41,35 +57,43 @@ def test_bad_config_exits_2(
     assert "CALIBRE_METADATA_DB" in capsys.readouterr().err
 
 
-def test_success_returns_0(
+def test_run_defaults_to_full(
     monkeypatch: pytest.MonkeyPatch,
     make_settings: SettingsFactory,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     _use_settings(monkeypatch, make_settings())
-    monkeypatch.setattr(cli, "ingest", lambda settings, stop: 42)
+    seen: list[Any] = []
+    _fake_run(monkeypatch, RunResult("ok", RunCounts(seen=3, added=2)), seen)
     with caplog.at_level("INFO"):
         assert cli.main([]) == 0
-    assert "Ingest complete. Upserted 42 chunks" in caplog.text
+    assert seen[0][0] == "full"
+    assert "Sync complete. seen=3 added=2" in caplog.text
 
 
-def test_failure_returns_1(
+@pytest.mark.parametrize(
+    ("result", "code", "log"),
+    [
+        (RunResult("busy", RunCounts(), "locked"), 0, "Skipped: locked"),
+        (RunResult("valve", RunCounts(), "too few"), 1, "without deletions: too few"),
+        (RuntimeError("qdrant unreachable"), 1, "qdrant unreachable"),
+    ],
+)
+def test_run_outcomes(
     monkeypatch: pytest.MonkeyPatch,
     make_settings: SettingsFactory,
     caplog: pytest.LogCaptureFixture,
+    result: RunResult | Exception,
+    code: int,
+    log: str,
 ) -> None:
     _use_settings(monkeypatch, make_settings())
-
-    def _boom(settings: Settings, stop: threading.Event) -> int:
-        raise RuntimeError("qdrant unreachable")
-
-    monkeypatch.setattr(cli, "ingest", _boom)
-    assert cli.main([]) == 1
-    assert "Ingestion failed" in caplog.text
-    assert "qdrant unreachable" in caplog.text
+    _fake_run(monkeypatch, result)
+    assert cli.main(["run", "--mode", "incremental"]) == code
+    assert log in caplog.text
 
 
-def test_sigterm_stops_ingest(
+def test_sigterm_stops_the_run(
     monkeypatch: pytest.MonkeyPatch,
     make_settings: SettingsFactory,
     caplog: pytest.LogCaptureFixture,
@@ -79,13 +103,43 @@ def test_sigterm_stops_ingest(
     handlers: dict[int, Callable[..., Any]] = {}
     monkeypatch.setattr(signal, "signal", handlers.__setitem__)
 
-    def _ingest(settings: Settings, stop: threading.Event) -> int:
-        # SIGTERM arrives mid-run: the handler sets the stop event.
+    def run(settings: Settings, mode: str, stop: threading.Event) -> RunResult:
         handlers[signal.SIGTERM](signal.SIGTERM, None)
         assert stop.is_set()
-        return 7
+        return RunResult("ok", RunCounts(seen=1))
 
-    monkeypatch.setattr(cli, "ingest", _ingest)
+    monkeypatch.setattr(pipeline, "run", run)
     with caplog.at_level("INFO"):
         assert cli.main([]) == 0
-    assert "Stopped early. Upserted 7 chunks" in caplog.text
+    assert "Stopped early. seen=1" in caplog.text
+
+
+def test_migrate(monkeypatch: pytest.MonkeyPatch, make_settings: SettingsFactory) -> None:
+    _use_settings(monkeypatch, make_settings(database_url="postgresql://x"))
+    calls: list[str] = []
+    monkeypatch.setattr(cli, "migrate", calls.append)
+    assert cli.main(["migrate"]) == 0
+    assert calls == ["postgresql://x"]
+
+    def broken(url: str) -> None:
+        raise RuntimeError("no db")
+
+    monkeypatch.setattr(cli, "migrate", broken)
+    assert cli.main(["migrate"]) == 1
+
+
+def test_status(
+    monkeypatch: pytest.MonkeyPatch,
+    make_settings: SettingsFactory,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _use_settings(monkeypatch, make_settings())
+    monkeypatch.setattr(pipeline, "status", lambda settings: {"source": "calibre"})
+    assert cli.main(["status"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"source": "calibre"}
+
+    def broken(settings: Settings) -> dict[str, Any]:
+        raise RuntimeError("no db")
+
+    monkeypatch.setattr(pipeline, "status", broken)
+    assert cli.main(["status"]) == 1

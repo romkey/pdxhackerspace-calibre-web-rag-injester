@@ -1,140 +1,135 @@
-from __future__ import annotations
-
-from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any
 
 import pytest
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client import QdrantClient
+from qdrant_client import models as qm
 
-from calibre_web2rag.qdrant_store import QdrantStore, _distance
-
-
-class _Client:
-    """Stands in for QdrantClient; subclasses change what it reports."""
-
-    exists: ClassVar[bool] = True
-    # object: whatever shape the collection's vectors config takes.
-    vectors: ClassVar[object] = SimpleNamespace(size=3)
-    fail_indexes: ClassVar[bool] = False
-
-    def __init__(self, url: str, api_key: str | None = None) -> None:
-        self.url = url
-        self.api_key = api_key
-        # Any: the keyword arguments QdrantStore passes to create_collection.
-        self.created: dict[str, Any] | None = None
-        self.indexes: list[str] = []
-        self.upserted: list[PointStruct] | None = None
-
-    def collection_exists(self, name: str) -> bool:
-        return self.exists
-
-    def create_collection(self, **kwargs: Any) -> None:
-        self.created = kwargs
-
-    def get_collection(self, name: str) -> SimpleNamespace:
-        params = SimpleNamespace(vectors=self.vectors)
-        return SimpleNamespace(config=SimpleNamespace(params=params))
-
-    def create_payload_index(self, *, collection_name: str, field_name: str, **_: object) -> None:
-        if self.fail_indexes:
-            raise RuntimeError("index already exists")
-        self.indexes.append(field_name)
-
-    def upsert(self, collection_name: str, points: list[PointStruct]) -> None:
-        self.upserted = points
-
-
-def _store(
-    monkeypatch: pytest.MonkeyPatch,
-    client_cls: type[_Client] = _Client,
-    *,
-    vector_size: int = 3,
-    distance: str = "cosine",
-) -> tuple[QdrantStore, _Client]:
-    monkeypatch.setattr("calibre_web2rag.qdrant_store.QdrantClient", client_cls)
-    store = QdrantStore(
-        url="http://qdrant:6333",
-        api_key="key",
-        collection="books",
-        vector_size=vector_size,
-        distance=distance,
-    )
-    assert isinstance(store.client, _Client)
-    return store, store.client
-
-
-@pytest.mark.parametrize(
-    ("name", "expected"),
-    [
-        ("cosine", Distance.COSINE),
-        ("DOT", Distance.DOT),
-        ("Euclid", Distance.EUCLID),
-    ],
+from calibre_web2rag.qdrant_store import (
+    CATALOG_INDEXES,
+    COMMON_INDEXES,
+    CollectionMismatchError,
+    QdrantStore,
+    _distance,
 )
-def test_distance_mapping(name: str, expected: Distance) -> None:
-    assert _distance(name) == expected
+from calibre_web2rag.sparse import sparse_vector
+
+pytestmark = pytest.mark.filterwarnings("ignore:Payload indexes have no effect")
+META = {"embedding_model": "m1"}
 
 
-def test_distance_unsupported() -> None:
-    with pytest.raises(ValueError, match="Unsupported Qdrant distance metric"):
+def _store(client: QdrantClient, **kwargs: Any) -> QdrantStore:
+    args: dict[str, Any] = {
+        "collection": "c",
+        "vector_size": 2,
+        "distance": "cosine",
+        "metadata": META,
+    }
+    args.update(kwargs)
+    return QdrantStore(client=client, **args)
+
+
+def _point(n: int, source: str = "calibre", run: str = "r1", doc: str = "d") -> qm.PointStruct:
+    return qm.PointStruct(
+        id=f"00000000-0000-0000-0000-{n:012d}",
+        vector={"dense": [1.0, float(n)], "sparse": sparse_vector(f"word{n}")},
+        payload={"source": source, "doc_id": doc, "sync_run_id": run, "content_hash": f"h{n}"},
+    )
+
+
+def test_creates_hybrid_collection_with_metadata() -> None:
+    client = QdrantClient(location=":memory:")
+    _store(client)
+    info = client.get_collection("c")
+    assert info.config.metadata == META
+    assert isinstance(info.config.params.vectors, dict)
+    assert info.config.params.vectors["dense"].size == 2
+    assert info.config.params.sparse_vectors is not None
+    assert info.config.params.sparse_vectors["sparse"].modifier == qm.Modifier.IDF
+    _store(client)  # reopening an existing matching collection is fine
+
+
+def test_mismatches_are_errors() -> None:
+    client = QdrantClient(location=":memory:")
+    _store(client)
+    with pytest.raises(CollectionMismatchError, match="VECTOR_SIZE is 3"):
+        _store(client, vector_size=3)
+    with pytest.raises(CollectionMismatchError, match="was embedded with 'm1'"):
+        _store(client, metadata={"embedding_model": "m2"})
+    client.create_collection(
+        "old", vectors_config=qm.VectorParams(size=2, distance=qm.Distance.COSINE)
+    )
+    with pytest.raises(CollectionMismatchError, match="without the 'dense'"):
+        _store(client, collection="old")
+
+
+def test_adds_metadata_to_a_collection_without_it() -> None:
+    client = QdrantClient(location=":memory:")
+    client.create_collection(
+        "shared",
+        vectors_config={"dense": qm.VectorParams(size=2, distance=qm.Distance.COSINE)},
+        sparse_vectors_config={"sparse": qm.SparseVectorParams(modifier=qm.Modifier.IDF)},
+    )
+    _store(client, collection="shared")
+    assert client.get_collection("shared").config.metadata == META
+
+
+def test_upsert_hashes_payloads_and_deletes() -> None:
+    client = QdrantClient(location=":memory:")
+    store = _store(client)
+    store.upsert([])
+    store.upsert([_point(1), _point(2, doc="e"), _point(3, source="wiki")])
+    ids = [str(_point(n).id) for n in (1, 2, 9)]
+    assert store.existing_hashes(ids) == {ids[0]: "h1", ids[1]: "h2"}
+
+    store.set_payload([ids[0]], {"sync_run_id": "r2"})
+    store.set_payload([], {"x": 1})
+    store.set_payload_for_doc("calibre", "e", {"sync_run_id": "r2"})
+    assert store.delete_stale("calibre", "r2") == 0
+    store.set_payload([ids[0]], {"sync_run_id": "r3"})
+    assert store.delete_stale("calibre", "r3") == 1
+    assert store.count("calibre") == 1
+    assert store.count() == 2
+
+    store.delete_docs("calibre", [])
+    store.delete_docs("calibre", ["d"])
+    assert store.count("calibre") == 0
+    store.delete_ids([])
+    store.delete_ids([str(_point(3).id)])
+    assert store.payloads() == []
+
+
+def test_payloads_scrolls_everything() -> None:
+    client = QdrantClient(location=":memory:")
+    store = _store(client)
+    store.upsert([_point(n) for n in range(1, 301)])
+    assert len(store.payloads("calibre")) == 300
+
+
+def test_indexes_are_requested(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = QdrantClient(location=":memory:")
+    requested: list[str] = []
+    monkeypatch.setattr(
+        client,
+        "create_payload_index",
+        lambda collection_name, field_name, field_schema: requested.append(field_name),
+    )
+    _store(client, indexes=COMMON_INDEXES | CATALOG_INDEXES)
+    for name in (
+        "source",
+        "tier",
+        "asset_ids",
+        "location_ids",
+        "topics",
+        "updated_at",
+        "section",
+        "doc_id",
+        "work_id",
+    ):
+        assert name in requested
+
+
+def test_distance() -> None:
+    assert _distance("DOT") == qm.Distance.DOT
+    assert _distance("euclid") == qm.Distance.EUCLID
+    with pytest.raises(ValueError, match="Unsupported"):
         _distance("manhattan")
-
-
-def test_creates_missing_collection_and_indexes(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _New(_Client):
-        exists = False
-
-    _, client = _store(monkeypatch, _New, distance="dot")
-    assert client.api_key == "key"
-    assert client.created is not None
-    assert client.created["collection_name"] == "books"
-    config = client.created["vectors_config"]
-    assert isinstance(config, VectorParams)
-    assert config.size == 3
-    assert config.distance == Distance.DOT
-    assert {"authors", "tags", "book_id", "chunk_type"} <= set(client.indexes)
-
-
-def test_existing_collection_matching_size(monkeypatch: pytest.MonkeyPatch) -> None:
-    _, client = _store(monkeypatch)
-    assert client.created is None
-
-
-def test_vector_size_mismatch_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(ValueError, match="already exists with vector size 3"):
-        _store(monkeypatch, vector_size=384)
-
-
-def test_named_vectors_size_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _Named(_Client):
-        vectors: ClassVar[object] = {"default": SimpleNamespace(size=768)}
-
-    with pytest.raises(ValueError, match="vector size 768"):
-        _store(monkeypatch, _Named)
-
-
-@pytest.mark.parametrize("vectors", [{}, {"x": object()}, None])
-def test_unknown_vector_shape_is_tolerated(
-    monkeypatch: pytest.MonkeyPatch, vectors: object
-) -> None:
-    class _Odd(_Client):
-        pass
-
-    _Odd.vectors = vectors
-    store, _ = _store(monkeypatch, _Odd)
-    assert store._existing_vector_size() is None
-
-
-def test_payload_index_errors_are_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _Failing(_Client):
-        fail_indexes = True
-
-    _store(monkeypatch, _Failing)
-
-
-def test_upsert_materializes_iterable(monkeypatch: pytest.MonkeyPatch) -> None:
-    store, client = _store(monkeypatch)
-    points = (PointStruct(id=i, vector=[0.0, 0.0, 0.0], payload={}) for i in range(2))
-    store.upsert(points)
-    assert isinstance(client.upserted, list)
-    assert len(client.upserted) == 2
