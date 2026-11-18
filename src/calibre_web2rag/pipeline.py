@@ -221,6 +221,9 @@ class Pipeline:
                 )
                 self._stage_books(repo, candidates, staged, run_id, counts, affected, changed_docs)
             if self.stop.is_set():
+                # Index what was staged: the next incremental run sees those
+                # books as unchanged and would never index them.
+                self._index("incremental", run_id, affected, changed_docs, allow_delete=False)
                 return RunResult("ok", counts, "stopped early")
             deleted = sorted(set(staged) - {str(i) for i in versions})
             previous = self.db.previous_full_run_seen(SOURCE, run_id)
@@ -812,8 +815,6 @@ class Pipeline:
             for r in self.db.staged_documents(SOURCE, [r["source_doc_id"] for r in rows])
         }
         for row in rows:
-            if self.stop.is_set():
-                return
             doc_id = book_doc_id(row["source_doc_id"])
             first = point_id(SOURCE, doc_id, 0)
             if (

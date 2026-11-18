@@ -535,6 +535,32 @@ def test_stop_ends_the_run_early(
     assert db.staged_documents(SOURCE) == []
 
 
+def test_stopped_run_indexes_what_it_staged(
+    harness_factory: Callable[..., Harness],
+    calibre: CalibreLibrary,
+    db: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calibre.add_book(1, "First")
+    calibre.add_book(2, "Second")
+    harness = harness_factory(booktext_enabled=True)
+    original = Pipeline.stage_book
+
+    # Any: stage_book's arguments.
+    def stop_after(self: Pipeline, book: Any, *args: Any) -> set[str]:
+        touched = original(self, book, *args)
+        self.stop.set()  # SIGTERM arrives while the first book is staged
+        return touched
+
+    monkeypatch.setattr(Pipeline, "stage_book", stop_after)
+    result = harness.run("full")
+
+    assert result.message == "stopped early"
+    assert [r["source_doc_id"] for r in db.staged_documents(SOURCE)] == ["1"]
+    assert set(harness.catalog()) == {"title:first--author"}
+    assert harness.payloads(harness.settings.member_collection)
+
+
 def test_a_bad_book_is_skipped(
     harness_factory: Callable[..., Harness],
     calibre: CalibreLibrary,
