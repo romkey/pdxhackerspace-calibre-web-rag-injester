@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- If indexing fails after books were staged, the next incremental run
+  restages and indexes them; before, they stayed unindexed until the next
+  full run because their `last_modified` already matched staging.
+
 ## [0.4.0] - 2026-11-19
 
 ### Added
