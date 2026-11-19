@@ -1,4 +1,10 @@
-"""Pure functions that turn books and registry rows into text and payloads."""
+"""Pure functions that turn books and registry rows into text and payloads.
+
+``point_id``, ``base_payload``, ``format_duration`` and ``catalog_text`` are
+shared with the pipeline's audiobook source (audiobookshelf-rag-ingester),
+which writes the same ``hs_catalog`` points from the same registry rows;
+keep them identical there.
+"""
 
 from __future__ import annotations
 
@@ -102,6 +108,16 @@ def json_hash(value: Any) -> str:
     return text_hash(json.dumps(value, sort_keys=True, default=str))
 
 
+def format_duration(seconds: float | None) -> str:
+    """'15 hr 30 min' or '42 min'; '' for no length."""
+    if not seconds or seconds <= 0:
+        return ""
+    hours, minutes = divmod(round(seconds / 60), 60)
+    if hours:
+        return f"{hours} hr {minutes} min" if minutes else f"{hours} hr"
+    return f"{max(minutes, 1)} min"
+
+
 def _join(label: str, values: Iterable[str]) -> str | None:
     items = [v for v in values if v]
     return f"{label}: {', '.join(items)}" if items else None
@@ -111,7 +127,8 @@ def _join(label: str, values: Iterable[str]) -> str | None:
 def catalog_text(
     work: dict[str, Any], manifestations: list[dict[str, Any]], series: str | None
 ) -> str:
-    """What a work's catalog point embeds: title, authors, series, description, topics, TOC."""
+    """What a work's catalog point embeds: title, authors, series, formats, narrators,
+    length, topics, description, contents and audiobook chapters."""
     details = [m.get("details") or {} for m in manifestations]
     # Prefer the library's own description; use the machine summary when the
     # description is missing or is marketing copy.
@@ -127,9 +144,12 @@ def catalog_text(
             "",
         )
     toc: list[str] = next((list(d["toc"]) for d in details if d.get("toc")), [])
+    chapters: list[str] = next((list(d["chapters"]) for d in details if d.get("chapters")), [])
     subtitle = next((str(d["subtitle"]) for d in details if d.get("subtitle")), "")
     tags = sorted({t for d in details for t in d.get("tags") or []})
     subjects = sorted({s for d in details for s in d.get("enriched_subjects") or []})
+    narrators = sorted({n for d in details for n in d.get("narrators") or []})
+    length = next((d["duration_seconds"] for d in details if d.get("duration_seconds")), None)
     formats = sorted({str(m["format"]) for m in manifestations})
 
     title = str(work["title"]) + (
@@ -144,6 +164,8 @@ def catalog_text(
         lines.append(f"Series: {series}{number}")
     for line in (
         _join("Formats in the library", formats),
+        _join("Narrated by", narrators),
+        f"Audiobook length: {format_duration(length)}" if length else None,
         _join("Topics", work.get("topics") or []),
         _join("Tags", tags),
         _join("Subjects", subjects),
@@ -156,6 +178,8 @@ def catalog_text(
         lines.extend(["", f"What this book is good for (machine-generated summary): {good_for}"])
     if toc:
         lines.extend(["", "Contents:", *(str(t) for t in toc)])
+    if chapters:
+        lines.extend(["", "Audiobook chapters:", *(str(c) for c in chapters)])
     return "\n".join(lines)
 
 

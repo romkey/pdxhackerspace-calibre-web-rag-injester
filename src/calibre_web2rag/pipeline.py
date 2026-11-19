@@ -731,6 +731,10 @@ class Pipeline:
                 "languages": sorted({lang for d in details for lang in d.get("languages") or []}),
                 "tags": sorted({t for d in details for t in d.get("tags") or []}),
                 "formats": sorted({str(m["format"]) for m in manifestations}),
+                "narrators": sorted({n for d in details for n in d.get("narrators") or []}),
+                "duration_seconds": next(
+                    (d["duration_seconds"] for d in details if d.get("duration_seconds")), None
+                ),
                 "manifestations": [
                     {
                         "format": m["format"],
@@ -740,6 +744,8 @@ class Pipeline:
                         "location": (m.get("details") or {}).get("location"),
                         "files": (m.get("details") or {}).get("formats", []),
                         "cover_path": (m.get("details") or {}).get("cover_path"),
+                        "narrators": (m.get("details") or {}).get("narrators", []),
+                        "duration_seconds": (m.get("details") or {}).get("duration_seconds"),
                     }
                     for m in manifestations
                 ],

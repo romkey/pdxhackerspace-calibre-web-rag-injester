@@ -52,6 +52,16 @@ Google Books.
 `enrichment`. Created `IF NOT EXISTS`; this repo's Alembic version table is
 `calibre_web2rag_alembic_version`.
 
+## Shared with the audiobook source
+
+audiobookshelf-rag-ingester writes the same shared tables, works and
+`hs_catalog` points. Keep these identical in both repos: the `CREATE`
+statements in the migration, `works.py` (its audiobook title cleanup is
+extra), `sanitize.py`, `linker.py`, `sparse.py`, `chunking.py`,
+`taxonomy.txt`, and in `documents.py` `point_id`, `base_payload`,
+`format_duration` and `catalog_text`, plus the catalog payload built in
+`pipeline.py`.
+
 ## Conventions
 
 - Configuration from environment variables; see docs/configuration.md.

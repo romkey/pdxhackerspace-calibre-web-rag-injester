@@ -35,6 +35,7 @@ CATALOG_INDEXES: dict[str, qm.PayloadSchemaType] = {
     "series": qm.PayloadSchemaType.KEYWORD,
     "tags": qm.PayloadSchemaType.KEYWORD,
     "year": qm.PayloadSchemaType.INTEGER,
+    "narrators": qm.PayloadSchemaType.KEYWORD,
 }
 
 
