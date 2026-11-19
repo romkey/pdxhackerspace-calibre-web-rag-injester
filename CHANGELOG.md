@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-19
+
 ### Fixed
 
 - If indexing fails after books were staged, the next incremental run
