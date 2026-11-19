@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-19
+
 ### Fixed
 
 - Releases publish again: the image build no longer exports its layer cache
