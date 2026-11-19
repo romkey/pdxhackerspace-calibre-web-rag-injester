@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Releases publish again: the image build no longer exports its layer cache
+  from a merged release PR's run, which has no writable cache scope and
+  failed the push. v0.3.0 was tagged but never published because of this;
+  this release is the first to ship the 0.3.0 changes.
+- The Release workflow no longer fails when the repository doesn't let
+  GitHub Actions open pull requests; it pushes the release branch and
+  prints the link to open the PR by hand.
+
 ## [0.3.0] - 2026-11-19
 
 ### Added
