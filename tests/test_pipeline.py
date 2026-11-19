@@ -670,3 +670,26 @@ def test_payload_only_change_is_written_without_reembedding(
     assert after["year"] == 2021
     assert after["text"] == before["text"]
     assert not [t for t in harness.embedder.texts if "Woodshop" in t]
+
+
+def test_failed_index_is_retried_by_the_next_incremental_run(
+    harness_factory: Callable[..., Harness],
+    calibre: CalibreLibrary,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calibre.add_book(1, "Woodshop Safety", authors=("Wendy Wood",), formats={"PDF": b"%PDF"})
+    harness = harness_factory()
+    pipeline = harness.pipeline()
+
+    # Any: whatever index_catalog is called with.
+    def broken(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("qdrant down")
+
+    monkeypatch.setattr(pipeline, "index_catalog", broken)
+    with pytest.raises(RuntimeError, match="qdrant down"):
+        pipeline.run("incremental")
+    assert harness.catalog() == {}
+    # Staging kept the book but forgot its version: the next run restages and indexes it.
+    result = harness.run("incremental")
+    assert result.counts.updated == 1
+    assert len(harness.catalog()) == 1

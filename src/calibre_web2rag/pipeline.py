@@ -224,7 +224,9 @@ class Pipeline:
             if self.stop.is_set():
                 # Index what was staged: the next incremental run sees those
                 # books as unchanged and would never index them.
-                self._index("incremental", run_id, affected, changed_docs, allow_delete=False)
+                self._index_or_forget(
+                    "incremental", run_id, affected, changed_docs, allow_delete=False
+                )
                 return RunResult("ok", counts, "stopped early")
             deleted = sorted(set(staged) - {str(i) for i in versions})
             previous = self.db.previous_full_run_seen(SOURCE, run_id)
@@ -238,8 +240,31 @@ class Pipeline:
                 logger.error("Safety valve: %s", message)
             elif deleted:
                 affected |= self._delete_books(deleted, counts)
-        self._index(mode, run_id, affected, changed_docs, allow_delete=status == "ok")
+        self._index_or_forget(mode, run_id, affected, changed_docs, allow_delete=status == "ok")
         return RunResult(status, counts, message)
+
+    def _index_or_forget(
+        self,
+        mode: Mode,
+        run_id: str,
+        affected: set[str],
+        changed_docs: set[str],
+        *,
+        allow_delete: bool,
+    ) -> None:
+        """Index; if that fails, make the next incremental run restage what changed.
+
+        Staging is committed first, and incremental runs skip books whose
+        last_modified matches staging, so a failed index would otherwise leave
+        them unindexed until the next full run.
+        """
+        try:
+            self._index(mode, run_id, affected, changed_docs, allow_delete=allow_delete)
+        except Exception:
+            self.db.conn.rollback()
+            self.db.forget_versions(SOURCE, sorted(changed_docs))
+            self.db.commit()
+            raise
 
     # -- staging ----------------------------------------------------------------
 
