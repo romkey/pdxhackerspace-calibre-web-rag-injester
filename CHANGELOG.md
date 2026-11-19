@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-19
+
 ### Changed
 
 - Every command applies pending database migrations before it starts, so
