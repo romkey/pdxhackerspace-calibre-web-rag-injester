@@ -1,5 +1,6 @@
 from calibre_web2rag.documents import (
     catalog_text,
+    format_duration,
     html_to_text,
     overview_sections,
     to_rfc3339,
@@ -73,3 +74,32 @@ def test_overview_sections() -> None:
     empty = dict(overview_sections([], library_url="https://b", request_info=None))
     assert "library of 0 books" in empty["The PDX Hackerspace ebook library"]
     assert empty["How to reach the ebook library"] == "Members open the library at https://b."
+
+
+def test_catalog_text_renders_audiobook_manifestations() -> None:
+    # The audiobook source writes these details; both sources render the
+    # same hs_catalog point, so the text must not depend on who wrote it.
+    work = {"title": "Dune", "authors": ["Frank Herbert"]}
+    manifestations = [
+        {
+            "format": "audiobook",
+            "details": {
+                "narrators": ["Scott Brick", "Orlagh Cassidy"],
+                "duration_seconds": 75600,
+                "chapters": ["Prologue", "Arrakis"],
+            },
+        },
+        {"format": "ebook", "details": {"description": "Spice.", "toc": ["Book One"]}},
+    ]
+    text = catalog_text(work, manifestations, None)
+    assert "Formats in the library: audiobook, ebook" in text
+    assert "Narrated by: Orlagh Cassidy, Scott Brick" in text
+    assert "Audiobook length: 21 hr" in text
+    assert text.endswith("Contents:\nBook One\n\nAudiobook chapters:\nPrologue\nArrakis")
+
+
+def test_format_duration() -> None:
+    assert format_duration(None) == ""
+    assert format_duration(30) == "1 min"
+    assert format_duration(3600) == "1 hr"
+    assert format_duration(3600 * 15.5) == "15 hr 30 min"

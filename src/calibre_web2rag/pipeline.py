@@ -35,6 +35,7 @@ from calibre_web2rag.documents import (
     html_to_text,
     json_hash,
     overview_sections,
+    payload_hash,
     point_id,
     text_hash,
     to_rfc3339,
@@ -616,13 +617,32 @@ class Pipeline:
         *,
         force: bool,
     ) -> int:
-        """Upsert (point id, payload) items, embedding only changed text."""
-        existing = {} if force else store.existing_hashes(i for i, _ in items)
-        todo = [(i, p) for i, p in items if force or existing.get(i) != p["content_hash"]]
-        unchanged = [i for i, p in items if i in existing and existing[i] == p["content_hash"]]
-        if not force and unchanged:
-            run_id = items[0][1]["sync_run_id"]
-            store.set_payload(unchanged, {"sync_run_id": run_id})
+        """Upsert (point id, payload) items, embedding only changed text.
+
+        A point whose text is unchanged but whose other payload fields changed
+        (year, languages, url, manifestations) gets its payload rewritten
+        without re-embedding.
+        """
+        if not items:
+            return 0
+        for _, payload in items:
+            payload["payload_hash"] = payload_hash(payload)
+        existing = {} if force else store.existing_state(i for i, _ in items)
+        todo = [
+            (i, p)
+            for i, p in items
+            if force or (existing.get(i) or (None,))[0] != p["content_hash"]
+        ]
+        same_text = [
+            (i, p)
+            for i, p in items
+            if not force and i in existing and existing[i][0] == p["content_hash"]
+        ]
+        stale = [(i, p) for i, p in same_text if existing[i][1] != p["payload_hash"]]
+        current = [i for i, p in same_text if existing[i][1] == p["payload_hash"]]
+        store.replace_payloads(stale)
+        if current:
+            store.set_payload(current, {"sync_run_id": items[0][1]["sync_run_id"]})
         size = self.settings.batch_size
         for start in range(0, len(todo), size):
             batch = todo[start : start + size]
@@ -731,6 +751,10 @@ class Pipeline:
                 "languages": sorted({lang for d in details for lang in d.get("languages") or []}),
                 "tags": sorted({t for d in details for t in d.get("tags") or []}),
                 "formats": sorted({str(m["format"]) for m in manifestations}),
+                "narrators": sorted({n for d in details for n in d.get("narrators") or []}),
+                "duration_seconds": next(
+                    (d["duration_seconds"] for d in details if d.get("duration_seconds")), None
+                ),
                 "manifestations": [
                     {
                         "format": m["format"],
@@ -740,6 +764,8 @@ class Pipeline:
                         "location": (m.get("details") or {}).get("location"),
                         "files": (m.get("details") or {}).get("formats", []),
                         "cover_path": (m.get("details") or {}).get("cover_path"),
+                        "narrators": (m.get("details") or {}).get("narrators", []),
+                        "duration_seconds": (m.get("details") or {}).get("duration_seconds"),
                     }
                     for m in manifestations
                 ],

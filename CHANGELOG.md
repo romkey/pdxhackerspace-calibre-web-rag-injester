@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Catalog points render audiobook manifestations written by the
+  pipeline's audiobook source (audiobookshelf-rag-ingester): narrators,
+  length and audiobook chapter titles in the text, and `narrators` and
+  `duration_seconds` in the payload (with a `narrators` index). Both
+  sources rebuild the same `hs_catalog` point, so their catalog text now
+  matches.
+
+### Fixed
+
+- A point whose text is unchanged but whose payload changed (year,
+  languages, URL, manifestations) now gets the new payload; before, only
+  its run ID was updated. Points carry a `payload_hash` for this.
+
 ## [0.3.2] - 2026-11-19
 
 ### Changed
