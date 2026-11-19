@@ -2,8 +2,8 @@
 
 **What:** the ebook-library source of the PDX Hackerspace RAG pipeline
 (plans 00 "shared architecture" and 02 "ebook library"). Member tier only.
-**Runs as:** a batch CLI. `migrate` applies the schema; `run --mode
-incremental` (hourly), `run --mode full` (nightly) or `run --mode reindex`
+**Runs as:** a batch CLI. Every command first applies pending schema
+migrations; `run --mode incremental` (hourly), `run --mode full` (nightly) or `run --mode reindex`
 syncs once and exits; `status` prints recent runs as JSON.
 **Talks to:** Calibre's `metadata.db` (a read-only snapshot; never
 Calibre-web's `app.db`) and book files, PostgreSQL, Qdrant, an

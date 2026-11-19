@@ -4,11 +4,13 @@ Syncs the Calibre ebook library into the member-tier RAG pipeline: the
 Postgres staging store, entity registry and catalog table, and the Qdrant
 hs_catalog and hs_member collections. Runs once and exits.
 
-  calibre-web2rag migrate                 # create or update the database schema
+  calibre-web2rag migrate                 # only create or update the database schema
   calibre-web2rag run --mode incremental  # hourly: changed and deleted books
   calibre-web2rag run --mode full         # nightly: everything, then reconcile
   calibre-web2rag run --mode reindex      # rebuild points from staging
   calibre-web2rag status                  # recent runs and counts, as JSON
+
+Every command first brings the database schema up to date.
 """
 
 import argparse
@@ -65,12 +67,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         stream=sys.stdout,
     )
 
+    # Every command needs the schema, so apply any pending migrations first;
+    # when it is already current this is one query.
+    try:
+        migrate(settings.database_url)
+    except Exception:
+        logger.exception("Migration failed")
+        return 1
     if args.command == "migrate":
-        try:
-            migrate(settings.database_url)
-        except Exception:
-            logger.exception("Migration failed")
-            return 1
         logger.info("Database schema is up to date")
         return 0
 

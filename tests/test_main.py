@@ -23,6 +23,14 @@ def _no_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "load_dotenv", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def migrations(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    # Records the database URLs main() migrated instead of touching Postgres.
+    calls: list[str] = []
+    monkeypatch.setattr(cli, "migrate", calls.append)
+    return calls
+
+
 def _use_settings(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: settings))
 
@@ -114,18 +122,49 @@ def test_sigterm_stops_the_run(
     assert "Stopped early. seen=1" in caplog.text
 
 
-def test_migrate(monkeypatch: pytest.MonkeyPatch, make_settings: SettingsFactory) -> None:
+@pytest.mark.parametrize("command", ["migrate", "run", "status"])
+def test_every_command_migrates_first(
+    monkeypatch: pytest.MonkeyPatch,
+    make_settings: SettingsFactory,
+    migrations: list[str],
+    command: str,
+) -> None:
+    # A run against a database nobody migrated must not fail on missing tables.
     _use_settings(monkeypatch, make_settings(database_url="postgresql://x"))
-    calls: list[str] = []
-    monkeypatch.setattr(cli, "migrate", calls.append)
-    assert cli.main(["migrate"]) == 0
-    assert calls == ["postgresql://x"]
+    order: list[str] = []
+    monkeypatch.setattr(cli, "migrate", lambda url: order.append(f"migrate {url}"))
+
+    def run(*args: Any) -> RunResult:
+        order.append("run")
+        return RunResult("ok", RunCounts())
+
+    def status(settings: Settings) -> dict[str, Any]:
+        order.append("status")
+        return {}
+
+    monkeypatch.setattr(pipeline, "run", run)
+    monkeypatch.setattr(pipeline, "status", status)
+    assert cli.main([command]) == 0
+    assert order[0] == "migrate postgresql://x"
+    assert order[1:] == ([] if command == "migrate" else [command])
+
+
+@pytest.mark.parametrize("command", ["migrate", "run", "status"])
+def test_failed_migration_stops_the_command(
+    monkeypatch: pytest.MonkeyPatch, make_settings: SettingsFactory, command: str
+) -> None:
+    _use_settings(monkeypatch, make_settings())
 
     def broken(url: str) -> None:
         raise RuntimeError("no db")
 
+    def never(*args: Any) -> Any:
+        raise AssertionError("ran without a schema")
+
     monkeypatch.setattr(cli, "migrate", broken)
-    assert cli.main(["migrate"]) == 1
+    monkeypatch.setattr(pipeline, "run", never)
+    monkeypatch.setattr(pipeline, "status", never)
+    assert cli.main([command]) == 1
 
 
 def test_status(

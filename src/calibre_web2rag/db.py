@@ -1,7 +1,7 @@
 """PostgreSQL: staging store, entity registry, catalog table, run status.
 
 Plain SQL with psycopg 3. The schema is in ``migrations/`` and is applied by
-``calibre-web2rag migrate``.
+``migrate()``, which every command calls first.
 """
 
 from __future__ import annotations
