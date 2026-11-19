@@ -2,7 +2,7 @@
 # PostgreSQL. Configure it in .env next to this file (see .env.example and
 # docs/configuration.md).
 #
-#   docker compose -f docker-compose.prod.yaml up -d      # migrate, one full sync
+#   docker compose -f docker-compose.prod.yaml up -d      # one full sync
 #   APP_VERSION=1.2.3 docker compose -f docker-compose.prod.yaml up -d   # pin a release
 #   docker compose -f docker-compose.prod.yaml build      # build the image locally instead
 #
@@ -13,22 +13,10 @@
 #   5 * * * * cd /srv/c2r && docker compose -f docker-compose.prod.yaml run --rm app calibre-web2rag --mode incremental
 #   30 3 * * * cd /srv/c2r && docker compose -f docker-compose.prod.yaml run --rm app calibre-web2rag --mode full
 #
+# Each run applies any pending database migrations before it syncs.
 # Overlapping runs are safe: a second run finds the lock held and exits.
 
 services:
-  # Applies database migrations, then exits.
-  migrate:
-    image: ghcr.io/romkey/pdxhackerspace-calibre-web-rag-injester:${APP_VERSION:-latest}
-    command: ["calibre-web2rag", "migrate"]
-    env_file:
-      - path: .env
-        required: false
-    depends_on:
-      db:
-        condition: service_healthy
-    security_opt:
-      - no-new-privileges:true
-
   app:
     image: ghcr.io/romkey/pdxhackerspace-calibre-web-rag-injester:${APP_VERSION:-latest}
     build:
@@ -49,8 +37,8 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+      db:
+        condition: service_healthy
     # Least privilege: nothing to write but /tmp, no capabilities.
     read_only: true
     tmpfs:

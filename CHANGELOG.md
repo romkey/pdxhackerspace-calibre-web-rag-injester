@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Every command applies pending database migrations before it starts, so
+  the production compose file no longer has a separate `migrate` service
+  and a database nobody migrated no longer fails a sync with `relation
+  "entity_aliases" does not exist`. Runs that start together on a new
+  database take turns migrating. `calibre-web2rag migrate` still exists
+  for migrating without syncing.
+
 ## [0.3.1] - 2026-11-19
 
 ### Fixed

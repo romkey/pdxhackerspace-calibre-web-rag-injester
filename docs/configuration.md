@@ -20,7 +20,7 @@ empty value (`NAME=`) counts as unset.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `DATABASE_URL` | required | `postgresql://user:password@host:5432/dbname`. Holds the staging store, entity registry, flat catalog table, LLM cache, enrichment results, quarantine and run status. Run `calibre-web2rag migrate` to create or update the schema. |
+| `DATABASE_URL` | required | `postgresql://user:password@host:5432/dbname`. Holds the staging store, entity registry, flat catalog table, LLM cache, enrichment results, quarantine and run status. Every run creates or updates the schema itself. |
 
 ## Qdrant
 

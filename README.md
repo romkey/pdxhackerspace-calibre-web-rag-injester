@@ -48,13 +48,16 @@ table that the realtime catalog tool counts and filters.
 Command line:
 
 ```bash
-calibre-web2rag migrate                  # create or update the PostgreSQL schema
 calibre-web2rag run --mode incremental   # hourly: changed (last_modified) and deleted books
 calibre-web2rag run --mode full          # nightly: every book, then delete what wasn't seen
 calibre-web2rag run --mode reindex       # rebuild every point from staging, no Calibre read
 calibre-web2rag status                   # recent runs, quarantine and catalog counts (JSON)
+calibre-web2rag migrate                  # only apply schema migrations
 calibre-web2rag --version
 ```
+
+Every command first applies any pending PostgreSQL migrations, so a new or
+upgraded install needs no separate migration step.
 
 `calibre-web2rag` alone is `run --mode full`. Exit codes: 0 on success
 (including a clean stop on SIGTERM, and a run skipped because another
@@ -111,8 +114,7 @@ cp .env.example .env   # then edit it: the Calibre paths, DATABASE_URL and POSTG
 docker compose -f docker-compose.prod.yaml up -d
 ```
 
-That starts Qdrant (on port 6333) and PostgreSQL, applies migrations, and
-runs one full sync with the latest release of
+That starts Qdrant (on port 6333) and PostgreSQL and runs one full sync with the latest release of
 `ghcr.io/romkey/pdxhackerspace-calibre-web-rag-injester`, with your library
 mounted read-only. Set `APP_VERSION=X.Y.Z` to pin a release. Then schedule
 the hourly and nightly runs from cron (see the comment at the top of
@@ -203,7 +205,8 @@ release's wheel:
 ```bash
 python3 -m venv ~/.venvs/calibre-web2rag
 ~/.venvs/calibre-web2rag/bin/pip install https://github.com/romkey/pdxhackerspace-calibre-web-rag-injester/releases/download/vX.Y.Z/calibre_web2rag-X.Y.Z-py3-none-any.whl
-~/.venvs/calibre-web2rag/bin/calibre-web2rag --version
+~/.venvs/calibre-web2rag/bin/calibre-web2rag migrate                  # only apply schema migrations
+calibre-web2rag --version
 ```
 
 For local sentence-transformers embeddings instead, install the
@@ -218,7 +221,7 @@ With Docker, nothing else to install:
 
 ```bash
 cp .env.example .env                                       # then edit it
-docker compose up --build                                  # migrate and sync from the working tree, with Qdrant and Postgres
+docker compose up --build                                  # sync from the working tree, with Qdrant and Postgres
 docker compose -f docker-compose.test.yaml run --rm test   # tests with coverage
 docker compose -f docker-compose.lint.yaml run --rm lint   # every lint check, as CI runs them
 ```
@@ -231,7 +234,7 @@ uv sync
 docker compose up -d db   # tests need PostgreSQL (the dev one, on port 5432)
 DATABASE_URL=postgresql://app:app@localhost:5432/app uv run pytest
 uv run mypy
-uv run calibre-web2rag migrate && uv run calibre-web2rag run --mode full
+uv run calibre-web2rag run --mode full
 ```
 
 With pip (25.1 or newer, for `--group`). pip doesn't read `uv.lock`, so it
@@ -243,7 +246,7 @@ python3 -m venv .venv
 pip install -e . --group dev
 DATABASE_URL=postgresql://app:app@localhost:5432/app pytest
 mypy
-calibre-web2rag migrate && calibre-web2rag run
+calibre-web2rag run
 ```
 
 Either way, `uvx pre-commit install` (or `pip install pre-commit &&

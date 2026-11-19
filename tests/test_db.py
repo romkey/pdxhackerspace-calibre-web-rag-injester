@@ -1,3 +1,10 @@
+import subprocess
+import sys
+import uuid
+from urllib.parse import urlsplit
+
+import psycopg
+
 from calibre_web2rag.db import Database, RunCounts, StagedDocument, migrate, sqlalchemy_url
 
 
@@ -10,6 +17,31 @@ def test_sqlalchemy_url() -> None:
 def test_migrate_is_idempotent(database_url: str) -> None:
     migrate(database_url)
     migrate(database_url)
+
+
+def test_concurrent_migrations_on_a_fresh_database(database_url: str) -> None:
+    # Hourly and nightly runs both migrate first; on an empty database they
+    # must not race to create the schema.
+    name = f"cw2r_fresh_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(database_url, autocommit=True) as admin:
+        admin.execute(f"CREATE DATABASE {name}")
+    fresh_url = urlsplit(database_url)._replace(path=f"/{name}").geturl()
+    # Separate processes, like real runs: Alembic's state is per process.
+    script = "import sys; from calibre_web2rag.db import migrate; migrate(sys.argv[1])"
+    try:
+        procs = [
+            # S603: this interpreter running a fixed script.
+            subprocess.Popen([sys.executable, "-c", script, fresh_url], stderr=subprocess.PIPE)  # noqa: S603
+            for _ in range(3)
+        ]
+        for proc in procs:
+            _, err = proc.communicate(timeout=60)
+            assert proc.returncode == 0, err.decode()
+        with Database.connect(fresh_url) as fresh:
+            assert fresh.aliases() == []
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as admin:
+            admin.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
 
 
 def test_staging_round_trip(db: Database) -> None:
