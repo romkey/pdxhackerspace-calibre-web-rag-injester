@@ -652,3 +652,21 @@ def test_load_taxonomy(tmp_path: Path) -> None:
 def test_point_ids_are_stable() -> None:
     assert point_id(SOURCE, "doc", 0) == point_id(SOURCE, "doc", 0)
     assert point_id(SOURCE, "doc", 0) != point_id(SOURCE, "doc", 1)
+
+
+def test_payload_only_change_is_written_without_reembedding(
+    harness_factory: Callable[..., Harness], calibre: CalibreLibrary
+) -> None:
+    calibre.add_book(1, "Woodshop Safety", authors=("Wendy Wood",), formats={"PDF": b"%PDF"})
+    harness = harness_factory()
+    harness.run("full")
+    (before,) = harness.catalog().values()
+    assert before["year"] == 2019
+    harness.embedder.calls.clear()
+    # The year isn't in the catalog text: the payload changes, the vector doesn't.
+    calibre.touch(1, "2025-01-01 00:00:00+00:00", pubdate="2021-03-01 00:00:00+00:00")
+    harness.run("incremental")
+    (after,) = harness.catalog().values()
+    assert after["year"] == 2021
+    assert after["text"] == before["text"]
+    assert not [t for t in harness.embedder.texts if "Woodshop" in t]

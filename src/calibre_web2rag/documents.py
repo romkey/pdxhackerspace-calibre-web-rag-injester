@@ -45,6 +45,16 @@ def text_hash(*parts: str) -> str:
     return digest.hexdigest()
 
 
+# Payload fields that change on every run without the point changing.
+_VOLATILE = frozenset({"indexed_at", "sync_run_id", "payload_hash"})
+
+
+# Any: payload values are JSON.
+def payload_hash(payload: dict[str, Any]) -> str:
+    """Hash of everything in a payload but the per-run fields."""
+    return json_hash({k: v for k, v in payload.items() if k not in _VOLATILE})
+
+
 def html_to_text(html: str | None) -> str:
     """Calibre's comments field (HTML) as plain text with paragraph breaks."""
     if not html:
