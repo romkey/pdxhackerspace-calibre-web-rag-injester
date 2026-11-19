@@ -1,6 +1,6 @@
 [project]
 name = "calibre-web2rag"
-version = "0.2.3"
+version = "0.3.0"
 description = "RAG ingester for Calibre Web libraries into Qdrant"
 readme = "README.md"
 license = "MIT"
