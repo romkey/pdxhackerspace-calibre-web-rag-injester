@@ -100,13 +100,20 @@ jobs:
             echo
             scripts/changelog-section.sh "$version"
           } > "$RUNNER_TEMP/body.md"
-          url=$(gh pr create --base main --head "$branch" --title "Release v$version" \
-            --body-file "$RUNNER_TEMP/body.md")
-          echo "url=$url" >> "$GITHUB_OUTPUT"
+          # Fails when the repository doesn't allow GitHub Actions to create
+          # pull requests (Settings -> Actions -> General); then open it by hand.
+          if url=$(gh pr create --base main --head "$branch" --title "Release v$version" \
+            --body-file "$RUNNER_TEMP/body.md"); then
+            echo "url=$url" >> "$GITHUB_OUTPUT"
+          else
+            compare="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+            echo "::warning::Pushed $branch but could not open the PR; open it at $compare"
+          fi
 
       # GitHub holds the CI and Lint runs of a PR opened by GITHUB_TOKEN until
       # someone approves them; the required checks only count those runs.
       - name: Approve the release PR's CI and Lint runs
+        if: steps.pr.outputs.url != ''
         env:
           GH_TOKEN: ${{ github.token }}
           URL: ${{ steps.pr.outputs.url }}
@@ -244,7 +251,9 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # A merged PR's run has no writable cache scope (its merge ref is
+          # gone), so exporting the cache there fails the push; read only.
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max' || '' }}
           provenance: mode=max
           sbom: true
 
