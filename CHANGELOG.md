@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-20
+
 ### Changed
 
 - Runs self-contained: the default command is now `serve`, which scans,
