@@ -14,6 +14,7 @@ import logging
 import threading
 import uuid
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.resources import files
@@ -125,6 +126,7 @@ class Pipeline:
         llm: LLM | None = None,
         enricher: Enricher | None = None,
         stop: threading.Event | None = None,
+        beat: Callable[[], None] | None = None,
     ) -> None:
         self.settings = settings
         self.db = db
@@ -132,6 +134,8 @@ class Pipeline:
         self.llm = llm
         self.enricher = enricher
         self.stop = stop or threading.Event()
+        # Touched while work progresses, for the serve loop's health check.
+        self.beat = beat or (lambda: None)
         self.taxonomy = load_taxonomy(settings.topic_taxonomy_file)
         metadata = {
             "embedding_model": settings.embedding_model,
@@ -287,6 +291,7 @@ class Pipeline:
             if self.stop.is_set():
                 logger.info("Stopping early as requested")
                 break
+            self.beat()
             doc_id = str(book.book_id)
             raw = book_raw(book)
             raw_hash = json_hash(raw)
@@ -670,6 +675,7 @@ class Pipeline:
             store.set_payload(current, {"sync_run_id": items[0][1]["sync_run_id"]})
         size = self.settings.batch_size
         for start in range(0, len(todo), size):
+            self.beat()
             batch = todo[start : start + size]
             texts = [
                 f"{p['context']}\n\n{p['text']}" if p["context"] else p["text"] for _, p in batch
@@ -851,6 +857,7 @@ class Pipeline:
     def _context(self, title: str, document: str, chunk: str, *, fallback: str) -> str:
         if self.llm is None:
             return fallback
+        self.beat()
         try:
             return self.llm.chunk_context(document_title=title, document=document, chunk=chunk)
         except LLMError as e:
@@ -924,7 +931,12 @@ class Pipeline:
         return items
 
 
-def build_pipeline(settings: Settings, db: Database, stop: threading.Event | None) -> Pipeline:
+def build_pipeline(
+    settings: Settings,
+    db: Database,
+    stop: threading.Event | None,
+    beat: Callable[[], None] | None = None,
+) -> Pipeline:
     llm = (
         LLM(
             model=settings.llm_model,
@@ -954,12 +966,24 @@ def build_pipeline(settings: Settings, db: Database, stop: threading.Event | Non
         llm=llm,
         enricher=enricher,
         stop=stop,
+        beat=beat,
     )
 
 
-def run(settings: Settings, mode: Mode, stop: threading.Event | None = None) -> RunResult:
+def run(
+    settings: Settings,
+    mode: Mode,
+    stop: threading.Event | None = None,
+    beat: Callable[[], None] | None = None,
+) -> RunResult:
     with Database.connect(settings.database_url) as db:
-        return build_pipeline(settings, db, stop).run(mode)
+        return build_pipeline(settings, db, stop, beat).run(mode)
+
+
+def last_full_run(settings: Settings) -> datetime | None:
+    """When the last full run finished: the serve loop's cue for the next one."""
+    with Database.connect(settings.database_url) as db:
+        return db.last_full_run_at(SOURCE)
 
 
 # Any: status rows are JSON.

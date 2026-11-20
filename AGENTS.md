@@ -13,9 +13,10 @@ open a pull request; CI and Lint must pass before it can merge.
 
 ## Deliberate differences from the templates
 
-- The app is a batch job, not a service: no port, no `/healthz`, and
-  `docker-compose.prod.yaml` runs it with `restart: "no"` and no health
-  check (restarting would re-ingest the library in a loop). Qdrant runs
+- The app is a long-running worker with no port and no `/healthz`: the
+  default `serve` command scans every `SCAN_INTERVAL_MINUTES` and sleeps in
+  between, and `docker-compose.prod.yaml` health-checks it with the
+  `healthcheck` command, which reads a heartbeat file. Qdrant runs
   alongside it in the dev and prod compose files.
 - `docker-compose.ollama.yaml` is an extra override file for GPU Ollama
   embeddings, used with either the dev or the prod compose file.

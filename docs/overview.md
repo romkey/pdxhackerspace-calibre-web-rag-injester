@@ -2,9 +2,13 @@
 
 **What:** the ebook-library source of the PDX Hackerspace RAG pipeline
 (plans 00 "shared architecture" and 02 "ebook library"). Member tier only.
-**Runs as:** a batch CLI. Every command first applies pending schema
-migrations; `run --mode incremental` (hourly), `run --mode full` (nightly) or `run --mode reindex`
-syncs once and exits; `status` prints recent runs as JSON.
+**Runs as:** a long-running worker with no port. The default command,
+`serve`, scans every `SCAN_INTERVAL_MINUTES` (default 60): incremental scans,
+plus a full reconcile when none has finished in `FULL_SCAN_INTERVAL_HOURS`
+(default 24). It touches a heartbeat file that `healthcheck` checks.
+`run --mode incremental|full|reindex` does one scan and exits; `status`
+prints recent runs as JSON. Every command except `healthcheck` first applies
+pending schema migrations.
 **Talks to:** Calibre's `metadata.db` (a read-only snapshot; never
 Calibre-web's `app.db`) and book files, PostgreSQL, Qdrant, an
 OpenAI-compatible gateway (embeddings and generation), Open Library and
@@ -58,7 +62,8 @@ audiobookshelf-rag-ingester writes the same shared tables, works and
 `hs_catalog` points. Keep these identical in both repos: the `CREATE`
 statements in the migration, `works.py` (its audiobook title cleanup is
 extra), `sanitize.py`, `linker.py`, `sparse.py`, `chunking.py`,
-`taxonomy.txt`, and in `documents.py` `point_id`, `base_payload`,
+`taxonomy.txt`, `schedule.py` (the `serve` loop and heartbeat),
+`db.last_full_run_at`, and in `documents.py` `point_id`, `base_payload`,
 `format_duration` and `catalog_text`, plus the catalog payload built in
 `pipeline.py`.
 

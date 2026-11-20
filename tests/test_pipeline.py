@@ -108,6 +108,7 @@ class Harness:
             )
         self.enricher = enricher
         self.stop = threading.Event()
+        self.beats = 0
 
     def pipeline(self) -> Pipeline:
         return Pipeline(
@@ -118,7 +119,11 @@ class Harness:
             llm=self.llm,
             enricher=self.enricher,
             stop=self.stop,
+            beat=self.beat,
         )
+
+    def beat(self) -> None:
+        self.beats += 1
 
     def run(self, mode: pipeline_module.Mode = "full") -> pipeline_module.RunResult:
         return self.pipeline().run(mode)
@@ -174,6 +179,7 @@ def test_full_run_builds_catalog_overview_and_tables(
     assert result.status == "ok"
     assert result.counts.seen == 3
     assert result.counts.added == 3
+    assert harness.beats >= 4  # each book and the embedding batches
     # Acceptance: the catalog tool's ebook count equals Calibre's.
     assert db.catalog_count(source=SOURCE, format="ebook") == 3
 

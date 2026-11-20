@@ -59,6 +59,8 @@ class Settings:
     google_books_api_key: str | None = None
     topic_taxonomy_file: str | None = None
     library_request_info: str | None = None
+    scan_interval_minutes: int = 60
+    full_scan_interval_hours: int = 24
     log_level: str = "INFO"
 
     @classmethod
@@ -180,6 +182,8 @@ class Settings:
             # Kept exactly as given: the trailing space usually matters.
             embedding_query_prefix=env.get("EMBEDDING_QUERY_PREFIX", ""),
             embedding_document_prefix=env.get("EMBEDDING_DOCUMENT_PREFIX", ""),
+            scan_interval_minutes=integer("SCAN_INTERVAL_MINUTES", 60, 1),
+            full_scan_interval_hours=integer("FULL_SCAN_INTERVAL_HOURS", 24, 1),
             log_level=log_level,
         )
 

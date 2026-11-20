@@ -114,14 +114,15 @@ cp .env.example .env   # then edit it: the Calibre paths, DATABASE_URL and POSTG
 docker compose -f docker-compose.prod.yaml up -d
 ```
 
-That starts Qdrant (on port 6333) and PostgreSQL and runs one full sync with the latest release of
+That starts Qdrant (on port 6333), PostgreSQL and the latest release of
 `ghcr.io/romkey/pdxhackerspace-calibre-web-rag-injester`, with your library
-mounted read-only. Set `APP_VERSION=X.Y.Z` to pin a release. Then schedule
-the hourly and nightly runs from cron (see the comment at the top of
-`docker-compose.prod.yaml`):
+mounted read-only. It runs on its own: the first scan is a full one, then it
+sleeps `SCAN_INTERVAL_MINUTES` (default 60) between incremental scans and
+does a full reconcile once every `FULL_SCAN_INTERVAL_HOURS` (default 24). No
+cron needed. Set `APP_VERSION=X.Y.Z` to pin a release. One-off commands:
 
 ```bash
-docker compose -f docker-compose.prod.yaml run --rm app calibre-web2rag run --mode incremental
+docker compose -f docker-compose.prod.yaml run --rm app calibre-web2rag run --mode reindex
 docker compose -f docker-compose.prod.yaml run --rm app calibre-web2rag status
 ```
 
