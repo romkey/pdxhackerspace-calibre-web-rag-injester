@@ -41,5 +41,6 @@ RUN groupadd --system --gid 10001 app \
  && useradd --system --gid 10001 --uid 10001 --no-log-init --no-create-home app
 COPY --from=build /venv /venv
 USER 10001:10001
-# A batch job: it ingests the library once and exits. No port, no /healthz.
+# Runs `serve`: scans, sleeps SCAN_INTERVAL_MINUTES, repeats. No port; `healthcheck`
+# reads the heartbeat file.
 CMD ["calibre-web2rag"]
