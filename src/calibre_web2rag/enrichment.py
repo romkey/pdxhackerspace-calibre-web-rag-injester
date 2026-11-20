@@ -77,6 +77,9 @@ class Enricher:
             headers={"User-Agent": f"calibre-web2rag/{__version__}"},
         )
 
+    def close(self) -> None:
+        self._client.close()
+
     # Any: decoded JSON.
     def _get(self, url: str, params: dict[str, str] | None = None) -> Any:
         try:

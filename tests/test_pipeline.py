@@ -699,3 +699,14 @@ def test_failed_index_is_retried_by_the_next_incremental_run(
     result = harness.run("incremental")
     assert result.counts.updated == 1
     assert len(harness.catalog()) == 1
+
+
+def test_close_releases_http_clients(harness_factory: Callable[..., Harness]) -> None:
+    # serve builds a pipeline per scan, so each one must close what it opened.
+    harness = harness_factory(llm=True, enricher=Enricher(timeout_seconds=5))
+    p = harness.pipeline()
+    p.close()
+    assert harness.llm is not None
+    assert harness.llm._client.is_closed
+    assert harness.enricher is not None
+    assert harness.enricher._client.is_closed
